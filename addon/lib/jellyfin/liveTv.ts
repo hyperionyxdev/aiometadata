@@ -1038,8 +1038,8 @@ async function itemFor(scope: Scope, descriptor: LiveDescriptor, id: string): Pr
 
 /**
  * Dispatcharr's channel link sends one long MPEG-TS stream, which Apple's player (and a browser)
- * can't open. Asked with `output_format=hls` (Dispatcharr 0.33 and later), the same link sends HLS
- * instead, which they can. Hyperion reads MPEG-TS itself and starts sooner on it, so it keeps the
+ * can't open. Asked with `output_format=hls`, or as an XC link ending in .m3u8 (Dispatcharr 0.33
+ * and later), the same channel comes as HLS instead, which they can. Hyperion reads MPEG-TS itself and starts sooner on it, so it keeps the
  * link as it is; every other client gets HLS. Links that aren't Dispatcharr's channel links, and
  * catch-up, are left alone.
  */
@@ -1056,6 +1056,13 @@ function liveUrlFor(req: any, url: string): { url: string; hls: boolean } {
     parsed = new URL(url);
   } catch {
     return { url, hls: false };
+  }
+  // An XC channel link (/live/<user>/<pass>/<id>.ts, as Dispatcharr and the addon give with an XC
+  // login): the same link ending in .m3u8 is HLS.
+  const xc = /^(.*\/live\/[^/]+\/[^/]+\/[^/.]+)(\.(?:ts|mp4))?$/.exec(parsed.pathname);
+  if (xc) {
+    parsed.pathname = `${xc[1]}.m3u8`;
+    return { url: parsed.toString(), hls: true };
   }
   if (!/\/proxy\/ts\/stream\/[^/]+\/?$/.test(parsed.pathname)) {
     // Its shape only, every name and id hidden, once: enough to see what form an addon's links take.
