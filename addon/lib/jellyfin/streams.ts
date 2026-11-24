@@ -36,6 +36,41 @@ export interface PlayableStream {
   requestHeaders: Record<string, string> | null;
   /** The same release under any debrid service, for SyncPlay members to match on. */
   release: string | null;
+  /** What the addon says of the version, for a client's version picker (see `versionDetails`). */
+  details: Record<string, unknown>;
+}
+
+const text = (value: unknown): string | undefined =>
+  typeof value === 'string' && value.trim() && !/^unknown$/i.test(value.trim()) ? value.trim() : undefined;
+const texts = (value: unknown): string[] | undefined => {
+  const list = Array.isArray(value) ? value.map(text).filter((v): v is string => !!v) : [];
+  return list.length ? list : undefined;
+};
+
+/**
+ * The version as the addon parsed it, in the fields a client's version picker reads off each
+ * version's `aiostreams` object: its resolution, quality, encode, picture and sound tags, size,
+ * release group, debrid service and whether that service has it ready. Absent fields stay absent.
+ */
+export function versionDetails(stream: any): Record<string, unknown> {
+  const data = stream?.streamData && typeof stream.streamData === 'object' ? stream.streamData : {};
+  const parsed = data.parsedFile && typeof data.parsedFile === 'object' ? data.parsedFile : {};
+  const size = Number(data.size ?? stream?.behaviorHints?.videoSize);
+  const service = typeof data.service === 'string' ? data.service : data.service?.id;
+  const entries: Record<string, unknown> = {
+    addon: text(typeof data.addon === 'string' ? data.addon : data.addon?.name),
+    service: text(service),
+    cached: typeof data.service?.cached === 'boolean' ? data.service.cached : undefined,
+    resolution: text(parsed.resolution),
+    quality: text(parsed.quality),
+    encode: text(parsed.encode),
+    visualTags: texts(parsed.visualTags),
+    audioTags: texts(parsed.audioTags),
+    releaseGroup: text(parsed.releaseGroup),
+    size: Number.isFinite(size) && size > 0 ? size : undefined,
+    filename: text(data.filename ?? stream?.behaviorHints?.filename),
+  };
+  return Object.fromEntries(Object.entries(entries).filter(([, v]) => v !== undefined));
 }
 
 // The stream addon adds what it parsed from a release only for a user agent it knows.
@@ -335,6 +370,7 @@ export function toPlayable(stream: any, allowHeaders = false): PlayableStream | 
     needsHeaders: headers,
     requestHeaders: headers ? requestHeadersOf(stream) : null,
     release: releaseIdentity(stream),
+    details: versionDetails(stream),
   };
 }
 
@@ -697,9 +733,11 @@ export function mediaSourceFor(
     RequiredHttpHeaders: playable.requestHeaders ?? {},
     // The first version takes its item's id, so this is the one that stays the same.
     aiostreams: {
+      ...playable.details,
       id: playable.id,
       name: playable.title || playable.name,
       description: playable.description,
+      ...(playable.release ? { release: playable.release } : {}),
       ...(playable.bingeGroup ? { bingeGroup: playable.bingeGroup } : {}),
     },
     DefaultAudioStreamIndex: 1,
