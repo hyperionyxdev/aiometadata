@@ -11,7 +11,7 @@ import { decodeJellyfinId, encodeJellyfinId, hashJellyfinId, isHashedJellyfinId,
 import { EMPTY_USER_DATA, collectionFolder, itemList, namedItem } from './dto';
 import { imageTag } from './imageTags';
 import { recallImages, rememberImages } from './items';
-import { profileKey } from './profiles';
+import { listProfiles, profileKey } from './profiles';
 import {
   coalesce,
   describeStatus,
@@ -239,6 +239,14 @@ async function readSource(base: string): Promise<LiveSource | null> {
       return lastSources.get(base) ?? null;
     }
   });
+}
+
+/**
+ * Live TV is set up for this configuration (a stream addon is named and Live TV is on), told to
+ * clients in each user's policy: many show Live TV only to a user it says may use it.
+ */
+export function liveTvOffered(config: any): boolean {
+  return liveTvEnabled() && !!normaliseStreamBase(config?.jellyfinStreamUrl || '');
 }
 
 /** The stream addon's live catalogs for this configuration, or null when it has none. */
@@ -1076,7 +1084,8 @@ export function registerLiveTv(router: any, deps: LiveTvDeps): void {
     res.json({
       Services: [{ Name: 'Stream addon', HomePageUrl: '', Status: 'Ok', StatusMessage: '', Version: '', HasUpdateAvailable: false, IsVisible: true, Tuners: [] }],
       IsEnabled: true,
-      EnabledUsers: [],
+      // Every profile may use it; some clients look for their user here before showing Live TV.
+      EnabledUsers: listProfiles(scope.config, scope.userUUID).map((profile) => profile.userId),
     });
   });
 
