@@ -533,6 +533,22 @@ async function fetchGuideDay(source: LiveSource, catalog: LiveCatalog, wanted: C
   }
 }
 
+/**
+ * A channel's programmes in time order, one at a time. Each day of the guide is asked for on its
+ * own, and an addon that makes up programmes for a channel without a guide makes them again for
+ * each day, a little apart, under other ids: one starting over a minute before the last one kept
+ * has ended is that slot again, and is left out.
+ */
+function oneAtATime(programmes: Programme[]): Programme[] {
+  const kept: Programme[] = [];
+  for (const programme of [...programmes].sort((a, b) => a.start - b.start)) {
+    const last = kept[kept.length - 1];
+    if (last && programme.start < last.end - 60_000) continue;
+    kept.push(programme);
+  }
+  return kept;
+}
+
 /** Each channel's programmes overlapping a window; `failed` when the addon answered none of what was asked. */
 async function guideFor(source: LiveSource, list: ChannelInfo[], from: number, to: number): Promise<{ byChannel: Map<string, Programme[]>; failed: boolean }> {
   const days = daysCovering(from, to);
@@ -558,7 +574,7 @@ async function guideFor(source: LiveSource, list: ChannelInfo[], from: number, t
         programmes.push(programme);
       }
     }
-    byChannel.set(channel.id, programmes.sort((a, b) => a.start - b.start));
+    byChannel.set(channel.id, oneAtATime(programmes));
   }
   return { byChannel, failed: asks.length > 0 && answers.every((answered) => !answered) };
 }
