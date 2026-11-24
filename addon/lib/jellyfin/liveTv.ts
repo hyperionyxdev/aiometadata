@@ -138,6 +138,10 @@ const guides = new LRUCache<string, Programme[]>({ max: cacheMax() * 4, ttl: 60 
 // Channels the addon no longer lists, left alone a minute rather than asked for again by every list naming them.
 const gone = new LRUCache<string, true>({ max: 5000, ttl: 60 * 1000 });
 const favouriteLists = new LRUCache<string, string[]>({ max: 2000, ttl: 5 * 60 * 1000 });
+// Lineups that answered an error when asked by a group name with a slash in it (the addon, or a
+// proxy in front of it, cannot route one): such groups are read from the whole lineup instead.
+const slashRefused = new LRUCache<string, true>({ max: 500, ttl: 6 * 60 * 60 * 1000 });
+const slashKey = (source: LiveSource, catalog: LiveCatalog) => `${source.base}|${catalogKey(catalog)}`;
 const programmeIds = new LRUCache<string, ProgrammeId>({ max: envInt('JELLYFIN_ID_CACHE_MAX', 100000, 1) });
 
 const running = new Map<string, Promise<any>>();
@@ -331,11 +335,12 @@ function segmentsFor(source: LiveSource, want: { group?: string; search?: string
     } else if (want.group !== undefined) {
       if (!catalog.groups.includes(want.group)) continue;
       // A group name with a slash goes in the request's path, and a proxy decoding %2F on the way
-      // can split it there, so an addon that doesn't read the parts back together answers another
-      // group. It's asked by its group all the same (reading the whole lineup for it took a long
-      // time), the channels kept to the group here; where that finds none, and the lineup can be
-      // read whole, it's read whole for the group.
-      if (want.group.includes('/')) out.push({ catalog, genre: want.group, only: want.group, wholeIfNone: !catalog.groupRequired });
+      // can split it there: the addon answers another group, or an error. It's asked by its group
+      // all the same (reading the whole lineup for it took a long time), the channels kept to the
+      // group here; where that finds none or fails, and the lineup can be read whole, it's read
+      // whole for the group, and from then on for a lineup that failed.
+      if (want.group.includes('/') && !catalog.groupRequired && slashRefused.has(slashKey(source, catalog))) out.push({ catalog, only: want.group });
+      else if (want.group.includes('/')) out.push({ catalog, genre: want.group, only: want.group, wholeIfNone: !catalog.groupRequired });
       else out.push({ catalog, genre: want.group });
     } else if (catalog.groupRequired) {
       for (const group of catalog.groups) out.push({ catalog, genre: group });
@@ -357,7 +362,17 @@ async function lineupSlice(source: LiveSource, segment: Segment, start: number, 
   let done = false;
   while (metas.length < start + count) {
     const skip = walked;
-    const page = await catalogPage(source, segment.catalog, { genre: segment.genre, search: segment.search, skip: skip ? String(skip) : undefined });
+    let page: any[];
+    try {
+      page = await catalogPage(source, segment.catalog, { genre: segment.genre, search: segment.search, skip: skip ? String(skip) : undefined });
+    } catch (error) {
+      // Asked by a group name with a slash, and the addon (or a proxy before it) answered an error:
+      // read the whole lineup for it, and don't ask that lineup by such a name again for a while.
+      if (skip || !segment.wholeIfNone || segment.genre === undefined) throw error;
+      slashRefused.set(slashKey(source, segment.catalog), true);
+      logger.info(`A Live TV group with a slash in its name couldn't be asked for by name (${(error as any)?.message || error}); reading the whole lineup for it`);
+      return lineupSlice(source, { catalog: segment.catalog, only: segment.only }, start, count);
+    }
     // An addon that ignores skip answers its first page again.
     if (skip && page.length && page[0]?.id === first) {
       done = true;
