@@ -27,12 +27,9 @@ const LIST_ROUTES = [
   '/Items/:itemId/Chapters',
   '/Videos/:itemId/AdditionalParts',
   '/System/ActivityLog/Entries',
-  '/LiveTv/Programs',
   '/LiveTv/Recordings',
   '/LiveTv/Timers',
   '/LiveTv/SeriesTimers',
-  '/LiveTv/Channels',
-  '/LiveTv/Programs/Recommended',
   '/LiveTv/Recordings/Folders',
 ];
 

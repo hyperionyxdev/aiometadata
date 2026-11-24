@@ -120,6 +120,20 @@ Intro, recap and outro markers are served as media segments, so a client with a 
 
 Each lookup sends the title, season and episode to the service asked. AniSkip is asked under the episode's MyAnimeList entry and number, so an anime browsed by TVDB seasons is translated first; its openings and endings become the intro and outro markers, and its recaps the recap marker. Its submissions are made against one release each, so the file's own length is sent when the stream addon reported it (the metadata's otherwise) and the release nearest to it answers; a length more than a tenth off every known release is a different cut and gets no markers from it. Other users inherit your choice unless their card says otherwise.
 
+## Live TV
+
+When the stream addon has live catalogs, the server lists a **Live TV** library beside the others, and clients with Live TV get channels, a guide and channel playback from it. A live catalog is one of type `tv` (or `channel`) in the addon's manifest; an addon that passes another addon's catalogs on, extras and all, works the same way. Without one there is no Live TV library, and the Live TV endpoints answer with empty lists.
+
+- **Channels** are the catalog's items, in the addon's order, fetched a page at a time as a client scrolls. A channel's number is the `channelNumber` the addon sends, or else its place in the lineup; its logo is its picture.
+- **Groups** are the options of the catalog's `genre` extra, served as the Live TV library's genres; picking one asks the catalog for that genre.
+- **Search** uses the catalog's `search` extra, and matches name and number here for a catalog without one. A channel whose number is the search comes first.
+- **The guide** needs a `date` extra: the catalog answers a `YYYY-MM-DD` day (UTC) with each channel's programmes as its videos, with a start (`startTime`, or `released`) and an end (`endTime`, or else the next programme's start). Channels are asked together with the `ids` extra where the catalog has it, and otherwise the day is read for the whole lineup. A catalog without `date` has channels but no guide, and the library says so to clients that read it.
+- **Catch-up** is offered on a programme that has ended, on a channel whose meta carries `behaviorHints.catchupDays`, for that many days. A client plays it by the programme's id, which asks the addon for streams under the programme's own video id.
+- **Playback** asks the addon's stream resource for the channel, as for a film: each stream is a version, the first under the channel's own id, and a live one is marked as a stream with no end.
+- **Favourite channels** are kept per user with the server's saved preferences, not on the watchlist, and come first in the channels airing now.
+
+Programme ids are not stored for good, as other ids are: they are held in memory and in Redis until the programme's catch-up runs out. Recordings and timers are not served.
+
 ## Watch history
 
 ### What the server records
@@ -304,6 +318,15 @@ All of these are in the dashboard under **Server**, or as environment variables,
 | `JELLYFIN_SEGMENTS_TTL` | `604800` | How long an episode's skip markers are kept, found or not. |
 | `INTRODB_TIMEOUT_MS`, `ANISKIP_TIMEOUT_MS` | `5000` | How long a skip marker lookup on IntroDB or AniSkip may take. |
 | `INTRODB_BASE_URL`, `ANISKIP_BASE_URL` | | A mirror or self-hosted instance in place of the public API. |
+
+### Live TV
+
+| Setting | Default | What it does |
+|---|---|---|
+| `JELLYFIN_LIVE_TV` | `true` | Offer Live TV where the stream addon has live catalogs. Off leaves it out for every configuration. |
+| `JELLYFIN_LIVE_CHANNELS_TTL` | `600` | How long the stream addon's manifest and channel pages are reused, in seconds. |
+| `JELLYFIN_LIVE_GUIDE_TTL` | `900` | How long a day of a channel's programmes is reused, in seconds. |
+| `JELLYFIN_LIVE_CACHE_MAX` | `5000` | Channel pages held in memory; four times as many channels and channel guide days are. |
 
 ### Subtitles
 

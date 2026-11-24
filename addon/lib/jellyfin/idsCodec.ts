@@ -11,7 +11,7 @@ const NONE16 = 0xffff;
 const MAX48 = 2 ** 48 - 1;
 
 export type PackableKind = 'movie' | 'series' | 'season' | 'episode';
-export type HashedKind = 'view' | 'genre' | 'person' | 'studio' | 'collection' | 'boxset' | 'marker' | 'playlist' | 'playlists';
+export type HashedKind = 'view' | 'genre' | 'person' | 'studio' | 'collection' | 'boxset' | 'marker' | 'playlist' | 'playlists' | 'livetv' | 'channel' | 'channelgroup' | 'programme';
 export type JellyfinKind = PackableKind | HashedKind;
 
 export type Descriptor =
@@ -29,7 +29,16 @@ export type Descriptor =
   | { k: 'marker'; i: string }
   /** A user's playlist, and the folder that lists them. */
   | { k: 'playlist'; p: string }
-  | { k: 'playlists' };
+  | { k: 'playlists' }
+  /**
+   * Live TV's view, a channel of the stream addon's live catalogs by its type and
+   * id, a group of channels by name, and one programme of a channel's guide: its
+   * channel, its own id at the addon, and its start and end in Unix seconds.
+   */
+  | { k: 'livetv' }
+  | { k: 'channel'; t: string; i: string }
+  | { k: 'channelgroup'; g: string }
+  | { k: 'programme'; t: string; c: string; i: string; s: number; e: number };
 
 const KIND_CODES: Record<PackableKind, number> = {
   movie: 1,
@@ -271,6 +280,14 @@ export function canonicalDescriptor(d: Descriptor): string {
       return `playlist|${d.p}`;
     case 'playlists':
       return 'playlists';
+    case 'livetv':
+      return 'livetv';
+    case 'channel':
+      return `channel|${d.t}|${d.i}`;
+    case 'channelgroup':
+      return `channelgroup|${d.g}`;
+    case 'programme':
+      return `programme|${d.t}|${d.c}|${d.i}|${d.s}|${d.e}`;
   }
 }
 

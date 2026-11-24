@@ -76,6 +76,7 @@ import { oneIdAsked, withCriticRatings } from './criticRatings';
 import { ImageQueueFull, SIZED_WIDTH, imageQueueFull, inImageSlot, shrinkToWidth, widthStep } from '../posterCache/resize';
 import { IMAGE_CSP } from '../posterCache/proxyResponse';
 import { registerStubs } from './stubs';
+import { liveTvView, registerLiveTv } from './liveTv';
 import { answerPlaylistListing, hasPlaylists, playlistAsItem, playlistConcurrency, playlistImages, playlistsFolder, registerPlaylistRoutes, type PlaylistRouteDeps } from './playlists';
 import { noteWantsPeople } from './viewer';
 import { decodeCursor, exportRow, findUser, historyPage, historyUsers, isEpisodeVideo, itemIdForVideo, userByKey, videoIdsOf } from './history';
@@ -1072,10 +1073,14 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
   });
   router.get('/Users/:userId', meHandler);
 
-  /** The libraries and, as in Jellyfin once the user has a playlist, their folder. */
+  /** The libraries, Live TV where the stream addon has live catalogs, and, as in Jellyfin once the user has a playlist, their folder. */
   const userViews = async (req: any, userUUID: string, serverId: string, config: any): Promise<any[]> => {
-    const [views, playlists] = await Promise.all([buildViews(userUUID, serverId, config), hasPlaylists(req, config)]);
-    return playlists ? [...views, playlistsFolder(serverId, null)] : views;
+    const [views, playlists, live] = await Promise.all([
+      buildViews(userUUID, serverId, config),
+      hasPlaylists(req, config),
+      liveTvView(config, serverId).catch(() => null),
+    ]);
+    return [...views, ...(live ? [live] : []), ...(playlists ? [playlistsFolder(serverId, null)] : [])];
   };
 
   const viewsHandler = async (req: any, res: any) => {
@@ -1134,6 +1139,9 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
     const parsed = parseInt(String(raw), 10);
     return Number.isFinite(parsed) ? parsed : fallback;
   };
+
+  // Ahead of the item, image, playback and favourite routes, which it hands on anything not Live TV.
+  registerLiveTv(router, { outsideViewingHours: (req: any) => outsideViewingHours(req) });
 
   router.get(['/Items', '/Users/:userId/Items'], async (req: any, res: any) => {
     const userUUID = req.params.userUUID;
