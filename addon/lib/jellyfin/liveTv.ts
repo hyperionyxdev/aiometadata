@@ -93,8 +93,10 @@ interface Segment {
   catalog: LiveCatalog;
   genre?: string;
   search?: string;
-  /** A group kept to here, from the whole lineup, rather than asked of the addon (see `segmentsFor`). */
+  /** Channels kept to this group here, by each channel's groups (see `segmentsFor`). */
   only?: string;
+  /** Asked by its group first; if that finds none of the group's channels, the whole lineup is read for it. */
+  wholeIfNone?: boolean;
 }
 
 interface Listed {
@@ -329,9 +331,11 @@ function segmentsFor(source: LiveSource, want: { group?: string; search?: string
     } else if (want.group !== undefined) {
       if (!catalog.groups.includes(want.group)) continue;
       // A group name with a slash goes in the request's path, and a proxy decoding %2F on the way
-      // split it there: the addon read another group and answered nothing. Where the lineup can
-      // be read whole, its channels are kept to the group here instead.
-      if (want.group.includes('/') && !catalog.groupRequired) out.push({ catalog, only: want.group });
+      // can split it there, so an addon that doesn't read the parts back together answers another
+      // group. It's asked by its group all the same (reading the whole lineup for it took a long
+      // time), the channels kept to the group here; where that finds none, and the lineup can be
+      // read whole, it's read whole for the group.
+      if (want.group.includes('/')) out.push({ catalog, genre: want.group, only: want.group, wholeIfNone: !catalog.groupRequired });
       else out.push({ catalog, genre: want.group });
     } else if (catalog.groupRequired) {
       for (const group of catalog.groups) out.push({ catalog, genre: group });
@@ -360,6 +364,10 @@ async function lineupSlice(source: LiveSource, segment: Segment, start: number, 
       break;
     }
     if (!skip) first = page[0]?.id;
+    // Asked by its group, and none of what came is in it: the addon read the name another way.
+    if (!skip && segment.wholeIfNone && segment.genre !== undefined && page.length && !page.some(inGroup)) {
+      return lineupSlice(source, { catalog: segment.catalog, only: segment.only }, start, count);
+    }
     walked += page.length;
     metas.push(...page.filter(inGroup));
     longest = Math.max(longest, page.length);
