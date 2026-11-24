@@ -1036,6 +1036,41 @@ async function itemFor(scope: Scope, descriptor: LiveDescriptor, id: string): Pr
 
 // ---------- Playback ----------
 
+/**
+ * Dispatcharr's channel link sends one long MPEG-TS stream, which Apple's player (and a browser)
+ * can't open. Asked with `output_format=hls` (Dispatcharr 0.33 and later), the same link sends HLS
+ * instead, which they can. Hyperion reads MPEG-TS itself and starts sooner on it, so it keeps the
+ * link as it is; every other client gets HLS. Links that aren't Dispatcharr's channel links, and
+ * catch-up, are left alone.
+ */
+const loggedShapes = new Set<string>();
+
+function wantsHls(req: any): boolean {
+  return !/^hyperion\b/i.test(clientInfo(req).client);
+}
+
+function liveUrlFor(req: any, url: string): { url: string; hls: boolean } {
+  if (!wantsHls(req)) return { url, hls: false };
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { url, hls: false };
+  }
+  if (!/\/proxy\/ts\/stream\/[^/]+\/?$/.test(parsed.pathname)) {
+    // Its shape only, every name and id hidden, once: enough to see what form an addon's links take.
+    const shape = parsed.pathname.split('/').map((part) => (/^(proxy|ts|stream|live|hls|play)$/i.test(part) || !part ? part : part.replace(/^[^.]*/, '*'))).join('/');
+    if (!loggedShapes.has(shape)) {
+      loggedShapes.add(shape);
+      logger.info(`A live link sent as it is to a client that wants HLS (its shape: ${shape})`);
+    }
+    return { url, hls: false };
+  }
+  parsed.searchParams.delete('output');
+  parsed.searchParams.set('output_format', 'hls');
+  return { url: parsed.toString(), hls: true };
+}
+
 async function liveMediaSources(req: any, scope: Scope, descriptor: Channel | ProgrammeId, allowHeaders: boolean): Promise<any[]> {
   const source = scope.source;
   if (!source) return [];
@@ -1060,9 +1095,10 @@ async function liveMediaSources(req: any, scope: Scope, descriptor: Channel | Pr
     rememberIssued(playable.id, playable.url);
     // A live stream names no file, so its container is read off its URL: MPEG-TS, HLS or a file type.
     const extension = /\.([a-z0-9]{2,4})$/i.exec(playable.url.split('?')[0])?.[1]?.toLowerCase();
-    const container = playable.container ?? (extension === 'm3u8' ? 'hls' : extension ?? null);
+    const sent = live ? liveUrlFor(req, playable.url) : { url: playable.url, hls: false };
+    const container = sent.hls ? 'hls' : playable.container ?? (extension === 'm3u8' ? 'hls' : extension ?? null);
     out.push({
-      ...mediaSourceFor(playable, runtime),
+      ...mediaSourceFor(sent.hls ? { ...playable, url: sent.url } : playable, runtime),
       Container: container,
       ...(live ? { IsInfiniteStream: true, RunTimeTicks: null } : { RunTimeTicks: runtime }),
     });
@@ -1227,7 +1263,7 @@ export function registerLiveTv(router: any, deps: LiveTvDeps): void {
     const wanted = param(req, 'MediaSourceId') ? normaliseJellyfinId(String(param(req, 'MediaSourceId'))) : null;
     const pinned = wanted && wanted !== itemId ? await recallIssued(wanted) : undefined;
     if (pinned) {
-      res.redirect(302, pinned);
+      res.redirect(302, descriptor.k === 'channel' ? liveUrlFor(req, pinned).url : pinned);
       return;
     }
     const scope = await scopeOf(req);
