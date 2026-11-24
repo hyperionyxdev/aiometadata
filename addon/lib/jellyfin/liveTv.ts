@@ -93,6 +93,8 @@ interface Segment {
   catalog: LiveCatalog;
   genre?: string;
   search?: string;
+  /** A group kept to here, from the whole lineup, rather than asked of the addon (see `segmentsFor`). */
+  only?: string;
 }
 
 interface Listed {
@@ -317,7 +319,12 @@ function segmentsFor(source: LiveSource, want: { group?: string; search?: string
     if (want.search !== undefined) {
       if (catalog.search) out.push({ catalog, search: want.search });
     } else if (want.group !== undefined) {
-      if (catalog.groups.includes(want.group)) out.push({ catalog, genre: want.group });
+      if (!catalog.groups.includes(want.group)) continue;
+      // A group name with a slash goes in the request's path, and a proxy decoding %2F on the way
+      // split it there: the addon read another group and answered nothing. Where the lineup can
+      // be read whole, its channels are kept to the group here instead.
+      if (want.group.includes('/') && !catalog.groupRequired) out.push({ catalog, only: want.group });
+      else out.push({ catalog, genre: want.group });
     } else if (catalog.groupRequired) {
       for (const group of catalog.groups) out.push({ catalog, genre: group });
     } else {
@@ -330,19 +337,25 @@ function segmentsFor(source: LiveSource, want: { group?: string; search?: string
 /** A lineup's channels from `start`, `count` of them, and whether it was walked to its end. */
 async function lineupSlice(source: LiveSource, segment: Segment, start: number, count: number): Promise<{ metas: any[]; done: boolean; known: number }> {
   const metas: any[] = [];
+  const inGroup = (meta: any) => segment.only === undefined || (Array.isArray(meta?.genres) && meta.genres.includes(segment.only));
+  // Skip counts the addon's own channels, which a group kept here has fewer of.
+  let walked = 0;
+  let first: string | undefined;
   let longest = 0;
   let done = false;
   while (metas.length < start + count) {
-    const skip = metas.length;
+    const skip = walked;
     const page = await catalogPage(source, segment.catalog, { genre: segment.genre, search: segment.search, skip: skip ? String(skip) : undefined });
     // An addon that ignores skip answers its first page again.
-    if (skip && page.length && page[0]?.id === metas[0]?.id) {
+    if (skip && page.length && page[0]?.id === first) {
       done = true;
       break;
     }
-    metas.push(...page);
+    if (!skip) first = page[0]?.id;
+    walked += page.length;
+    metas.push(...page.filter(inGroup));
     longest = Math.max(longest, page.length);
-    if (!segment.catalog.pages || page.length === 0 || page.length < longest || metas.length >= MAX_LINEUP) {
+    if (!segment.catalog.pages || page.length === 0 || page.length < longest || walked >= MAX_LINEUP) {
       done = true;
       break;
     }
@@ -866,12 +879,15 @@ async function channelPage(
   return { items: await channelItems(source, ids, found, scope.serverId, favouriteSet, withCurrent), total };
 }
 
-async function groupOf(raw: unknown): Promise<string | undefined> {
-  for (const id of String(raw ?? '').split(',').map((v) => v.trim()).filter(Boolean)) {
+/** The group a channel list asks for: by its id (`GenreIds`), else by its name (`Genres`, pipe-delimited as clients send them). */
+async function groupOf(req: any, scope: Scope): Promise<string | undefined> {
+  for (const id of String(param(req, 'GenreIds') ?? '').split(',').map((v) => v.trim()).filter(Boolean)) {
     const descriptor = await liveDescriptor(id);
     if (descriptor?.k === 'channelgroup') return descriptor.g;
   }
-  return undefined;
+  const names = String(param(req, 'Genres') ?? '').split('|').map((v) => v.trim()).filter(Boolean);
+  const groups = new Set((scope.source?.catalogs ?? []).flatMap((catalog) => catalog.groups));
+  return names.find((name) => groups.has(name));
 }
 
 async function answerChannels(req: any, res: any, scope: Scope, group: string | undefined): Promise<void> {
@@ -1059,7 +1075,7 @@ export function registerLiveTv(router: any, deps: LiveTvDeps): void {
       res.json(itemList([], 0, 0));
       return;
     }
-    await answerChannels(req, res, scope, await groupOf(param(req, 'GenreIds')));
+    await answerChannels(req, res, scope, await groupOf(req, scope));
   });
 
   router.get('/LiveTv/Channels/:channelId', async (req: any, res: any) => {
@@ -1121,7 +1137,7 @@ export function registerLiveTv(router: any, deps: LiveTvDeps): void {
       res.json(itemList(kept, kept.length, 0));
       return;
     }
-    const group = parentDescriptor?.k === 'channelgroup' ? parentDescriptor.g : await groupOf(param(req, 'GenreIds'));
+    const group = parentDescriptor?.k === 'channelgroup' ? parentDescriptor.g : await groupOf(req, scope);
     await answerChannels(req, res, scope, group);
   });
 
