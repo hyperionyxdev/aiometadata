@@ -85,6 +85,10 @@ import { livePrimaryKind, liveTvViewId } from './livetv/items';
 import { liveReportGuard } from './livetv/reports';
 import { asDefault, createLivePins, liveSourceIds, pickLive, pinScope, sourcesNamed } from './livetv/sources';
 import { GONE, placementFor } from './livetv/lineup';
+import { dispatcharrFor, dispatcharrLive, type DispatcharrLive } from './dispatcharr';
+import { DIRECT_BASE, withDispatcharr } from './dispatcharr/addon';
+import { liveUrlFor } from './dispatcharr/hls';
+import { profileUserId } from './profiles';
 import { addonFetch, addonFetchMaxBytes, readCappedResponse } from '../../utils/outboundGuard';
 import { answerPlaylistListing, hasPlaylists, playlistAsItem, playlistConcurrency, playlistImages, playlistsFolder, registerPlaylistRoutes, type PlaylistRouteDeps } from './playlists';
 import { noteWantsPeople } from './viewer';
@@ -403,18 +407,28 @@ async function resumablePick(req: any, userUUID: string, config: any, type: stri
 
 const LIVE_MANIFEST_TTL_SECONDS = 7 * 24 * 60 * 60;
 
+/** Dispatcharr Live TV for the profile a configuration is scoped to, where the server reads it and lets this profile use it. */
+function dispatcharrOf(config: any): DispatcharrLive | null {
+  // The configuration's UUID is the one in the signed-in request's path, set by loadConfig.
+  const userUUID = typeof config?.userUUID === 'string' ? config.userUUID : undefined;
+  const profileId = typeof config?.jellyfinProfileId === 'string' && config.jellyfinProfileId ? config.jellyfinProfileId : null;
+  return dispatcharrFor({ userUUID, profiles: userUUID ? [{ id: profileId, userId: profileUserId(userUUID, profileId) }] : [] });
+}
+
 const liveTvGate: GateDeps = {
   enabled: liveTvEnabled,
   capped: hasAgeRatingCap,
-  baseFor: (config: any) => normaliseStreamBase(config?.jellyfinStreamUrl || ''),
-  addon: createAddonReader({
+  // Where the server reads Dispatcharr for this profile, its Live TV comes from there
+  // (`dispatcharr/addon.ts`); otherwise from the stream addon's live catalogs.
+  baseFor: (config: any) => (dispatcharrOf(config) ? DIRECT_BASE : normaliseStreamBase(config?.jellyfinStreamUrl || '')),
+  addon: withDispatcharr(createAddonReader({
     userAgent: () => streamUserAgent(),
     fetch: addonFetch,
     readBody: (response) => readCappedResponse(response, addonFetchMaxBytes()),
     store: redis
       ? { get: (key) => redis!.get(key), set: (key, value) => redis!.set(key, value, 'EX', LIVE_MANIFEST_TTL_SECONDS) }
       : undefined,
-  }),
+  }), dispatcharrLive),
 };
 
 const livePins = createLivePins();
@@ -1859,7 +1873,9 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
     { live, cache = !live, refresh = false, allowHeaders = false }: { live: boolean; cache?: boolean; refresh?: boolean; allowHeaders?: boolean }
   ): Promise<any[]> => {
     const config = await loadConfig(req);
-    const base = normaliseStreamBase(config?.jellyfinStreamUrl || '');
+    // A Dispatcharr channel or programme: its sources come from Dispatcharr, not the stream addon.
+    const direct = stremioId.startsWith('dispatcharr:') ? dispatcharrOf(config) : null;
+    const base = direct ? DIRECT_BASE : normaliseStreamBase(config?.jellyfinStreamUrl || '');
     if (!base) {
       logger.warn(`No stream addon configured for ${req.params.userUUID}: it will show no streams for anything`);
       return [];
@@ -1871,7 +1887,16 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
     const streams =
       (refresh || !cache ? undefined : recallStreams(cacheKey)) ??
       (await coalesce(cacheKey, async () => {
-        const fetched = await fetchStreams(base, stremioType, stremioId, client);
+        const fetched = direct
+          ? await direct.streams(stremioType, stremioId).then(
+              // A live channel comes as HLS to a client that can't open one long MPEG-TS stream.
+              (streams) => ({ streams: live ? streams.map((stream: any) => ({ ...stream, url: liveUrlFor(req, stream.url) })) : streams, failure: undefined as string | undefined }),
+              (error: any) => {
+                logger.warn(`A channel's sources could not be read from Dispatcharr: ${error?.message || error}`);
+                return { streams: [] as any[], failure: 'Dispatcharr could not be reached' as string | undefined };
+              }
+            )
+          : await fetchStreams(base, stremioType, stremioId, client);
         if (fetched.streams.length && cache) rememberStreams(cacheKey, fetched.streams);
         if (fetched.failure) rememberFailure(cacheKey, fetched.failure);
         return fetched.streams;
@@ -2221,6 +2246,11 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
     if (!sources.length) {
       res.json({ MediaSources: [], PlaySessionId: randomUUID(), ErrorCode: 'NoCompatibleStream' });
       return;
+    }
+    // Dispatcharr, with switching on: a stream chosen to play switches its channel to it.
+    const direct = allowed.base === DIRECT_BASE ? dispatcharrOf(await loadConfig(req)) : null;
+    if (direct && requested && sources !== withIds && descriptor.k === 'channel') {
+      await direct.chosen(descriptor.i, sources[0]?.aiostreams?.bingeGroup);
     }
     res.json({ MediaSources: sources, PlaySessionId: randomUUID() });
   };
