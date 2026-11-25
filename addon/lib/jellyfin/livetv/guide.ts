@@ -370,8 +370,20 @@ export async function programmesFor(
     const own = scheduleOf(addon, base, channels[n]).filter((p) => p.start < toMs && p.end > fromMs);
     if (own.length) merged.set(`${placement.meta.type}|${placement.meta.id}`, own);
   });
-  for (const [key, byStart] of found) merged.set(key, [...byStart.values()].sort((a, b) => a.start - b.start));
+  for (const [key, byStart] of found) merged.set(key, oneAtATime([...byStart.values()].sort((a, b) => a.start - b.start)));
   return merged;
+}
+
+/**
+ * Programmes in start order, one at a time: where days read apart overlap (a programme running past
+ * midnight listed again the next day, a little later), the earlier one ends where the next begins.
+ * Copies, as the ones read are kept for other requests.
+ */
+export function oneAtATime(sorted: Programme[]): Programme[] {
+  return sorted.map((programme, n) => {
+    const next = sorted[n + 1];
+    return next && programme.end > next.start ? { ...programme, end: next.start } : programme;
+  });
 }
 
 export interface ProgrammeFlags {
