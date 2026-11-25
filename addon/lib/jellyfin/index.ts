@@ -407,6 +407,40 @@ async function resumablePick(req: any, userUUID: string, config: any, type: stri
 
 const LIVE_MANIFEST_TTL_SECONDS = 7 * 24 * 60 * 60;
 
+// Favourite channels as this server kept them before upstream's Live TV: the channels' ids, with
+// the profile's other server-side preferences.
+const OLD_FAVOURITES_PREF = 'livetv-favourites';
+const OLD_FAVOURITES_CLIENT = 'aiometadata';
+const favouritesMoved = new Set<string>();
+
+/**
+ * Moves a profile's favourite channels, kept before as a list of channel ids, to where upstream's
+ * Live TV keeps them (by type and id), once. The old list is then emptied, so it's never moved again.
+ */
+async function moveOldFavourites(userUUID: string, key: string): Promise<void> {
+  const mark = `${userUUID}|${key}`;
+  if (favouritesMoved.has(mark)) return;
+  favouritesMoved.add(mark);
+  try {
+    const stored = await database.getPreferences(userUUID, key, OLD_FAVOURITES_PREF, OLD_FAVOURITES_CLIENT);
+    const ids: unknown[] = Array.isArray(stored?.Channels) ? stored.Channels : [];
+    if (!ids.length) return;
+    let moved = 0;
+    for (const id of ids) {
+      const descriptor: any = await decodeJellyfinId(normaliseJellyfinId(String(id ?? ''))).catch(() => null);
+      if (descriptor?.k !== 'channel' || typeof descriptor.t !== 'string' || typeof descriptor.i !== 'string') continue;
+      await database.setChannelFavourite(userUUID, key, `${descriptor.t}|${descriptor.i}`, true);
+      moved++;
+    }
+    await database.savePreferences(userUUID, key, OLD_FAVOURITES_PREF, OLD_FAVOURITES_CLIENT, { Channels: [], MovedTo: 'channel-favourites' });
+    logger.info(`Moved ${moved} of ${ids.length} favourite channels to Live TV's own list`);
+  } catch (error: any) {
+    // Tried again on the next start.
+    favouritesMoved.delete(mark);
+    logger.warn(`Favourite channels couldn't be moved yet: ${error?.message || error}`);
+  }
+}
+
 /** Dispatcharr Live TV for the profile a configuration is scoped to, where the server reads it and lets this profile use it. */
 function dispatcharrOf(config: any): DispatcharrLive | null {
   // The configuration's UUID is the one in the signed-in request's path, set by loadConfig.
@@ -2193,7 +2227,10 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
     serverIdFor,
     profileKey,
     favourites: {
-      list: (userUUID: string, key: string) => database.listChannelFavourites(userUUID, key),
+      list: async (userUUID: string, key: string) => {
+        await moveOldFavourites(userUUID, key);
+        return database.listChannelFavourites(userUUID, key);
+      },
       set: (userUUID: string, key: string, channel: string, on: boolean) => database.setChannelFavourite(userUUID, key, channel, on),
     },
     resolveSourcesFor,
