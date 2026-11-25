@@ -3,6 +3,10 @@ name: Follow upstream releases
 # Keeps the live-tv branch on the newest AIOMetadata release. Once a day it merges a release that
 # isn't in live-tv yet and builds the live-tv image, which servers watching that tag then pull.
 # A release that doesn't merge cleanly builds nothing: it opens an issue to merge it by hand.
+#
+# Then live-tv-dispatcharr (live-tv with Live TV read straight from Dispatcharr) follows live-tv:
+# whenever live-tv has commits it lacks, live-tv is merged into it and its image is built under the
+# live-tv-dispatcharr tag. A merge that doesn't go cleanly builds nothing and opens an issue too.
 on:
   schedule:
     - cron: '17 11 * * *'
@@ -26,6 +30,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       UPSTREAM: cedya77/aiometadata
       BRANCH: live-tv
+      FOLLOWER: live-tv-dispatcharr
     steps:
       - name: Check out live-tv
         uses: actions/checkout@v4
@@ -84,5 +89,51 @@ jobs:
             gh issue create -R "$GITHUB_REPOSITORY" --title "$title" --body "AIOMetadata $TAG changes code that the Live TV changes on \`$BRANCH\` also change, so it wasn't merged and no image was built. The server keeps running the last \`live-tv\` image.
 
           To finish it: merge \`$TAG\` into \`$BRANCH\` by hand, fix the conflicting files, push, then run **Docker - Build and Push PREVIEW Image** on \`$BRANCH\` with the tag \`live-tv\`. This issue can be closed once that's done; the next daily run carries on from there."
+          fi
+          exit 1
+
+      - name: Merge live-tv into live-tv-dispatcharr
+        id: follower
+        if: steps.merge.outputs.result == 'merged' || steps.merge.outputs.result == 'current'
+        run: |
+          if ! git ls-remote --exit-code --heads origin "$FOLLOWER" >/dev/null; then
+            echo "There is no $FOLLOWER branch; nothing to do."
+            echo "result=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          live=$(git rev-parse HEAD)
+          git fetch --no-tags origin "refs/heads/$FOLLOWER:refs/remotes/origin/$FOLLOWER"
+          git checkout -B "$FOLLOWER" "origin/$FOLLOWER"
+          if git merge-base --is-ancestor "$live" HEAD; then
+            echo "$BRANCH is in $FOLLOWER already; nothing to do."
+            echo "result=current" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # GitHub's own no-reply bot identity, for a merge no person made.
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if git merge --no-edit -m "chore: merge $BRANCH into $FOLLOWER" "$live"; then
+            git push origin "HEAD:$FOLLOWER"
+            echo "result=merged" >> "$GITHUB_OUTPUT"
+            echo "Merged $BRANCH into $FOLLOWER."
+          else
+            git merge --abort
+            echo "result=conflict" >> "$GITHUB_OUTPUT"
+            echo "$BRANCH doesn't merge cleanly into $FOLLOWER." >&2
+          fi
+
+      - name: Build the live-tv-dispatcharr image
+        if: steps.follower.outputs.result == 'merged'
+        run: gh workflow run docker-publish-preview.yml -R "$GITHUB_REPOSITORY" --ref "$FOLLOWER" -f tag=live-tv-dispatcharr
+
+      - name: Ask for the live-tv-dispatcharr merge to be done by hand
+        if: steps.follower.outputs.result == 'conflict'
+        run: |
+          title="$BRANCH doesn't merge into $FOLLOWER cleanly"
+          open=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number -q '.[0].number')
+          if [ -z "$open" ]; then
+            gh issue create -R "$GITHUB_REPOSITORY" --title "$title" --body "\`$BRANCH\` changes code that the Dispatcharr changes on \`$FOLLOWER\` also change, so it wasn't merged and no image was built. The server keeps running the last \`live-tv-dispatcharr\` image.
+
+          To finish it: merge \`$BRANCH\` into \`$FOLLOWER\` by hand, fix the conflicting files, push, then run **Docker - Build and Push PREVIEW Image** on \`$FOLLOWER\` with the tag \`live-tv-dispatcharr\`. This issue can be closed once that's done; the next daily run carries on from there."
           fi
           exit 1
