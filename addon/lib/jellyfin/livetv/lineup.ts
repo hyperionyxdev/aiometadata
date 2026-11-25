@@ -523,6 +523,47 @@ export function groupCatalogs(catalogs: LiveCatalog[], genre: string): LiveCatal
 }
 
 /** A group's channels, which keep the numbers of the whole list. */
+/**
+ * Addons that couldn't be asked for a group by a name with a slash in it, by when: a proxy decoding
+ * %2F on the way splits the name in the request's path, and the addon answers an error, or another
+ * group. Their slashed groups are read from the whole lineup for a while instead.
+ */
+const slashRefused = new Map<string, number>();
+const SLASH_REFUSED_MS = 6 * 60 * 60 * 1000;
+
+function refusesSlashes(addon: LineupAddon, base: string): boolean {
+  const at = slashRefused.get(base);
+  if (at !== undefined && addon.now() - at < SLASH_REFUSED_MS) return true;
+  slashRefused.delete(base);
+  return false;
+}
+
+/** A group's entries: for a name with a slash, only the channels that say they're in it, or say nothing. */
+async function groupEntries(
+  addon: LineupAddon,
+  base: string,
+  catalogs: LiveCatalog[],
+  genre: string,
+  end: number
+): Promise<{ entries: Placement[]; finished: boolean }> {
+  if (!genre.includes('/')) {
+    const list = await walk(addon, base, groupCatalogs(catalogs, genre), (l) => l.entries.length >= end, { want: end });
+    return { entries: list.entries, finished: list.finished };
+  }
+  if (!refusesSlashes(addon, base)) {
+    const inGroup = (entry: Placement) => !entry.meta.groups?.length || entry.meta.groups.includes(genre);
+    const list = await walk(addon, base, groupCatalogs(catalogs, genre), (l) => l.entries.filter(inGroup).length >= end, { want: end });
+    const entries = list.entries.filter(inGroup);
+    if (entries.length || !(list.finished || list.blocked)) return { entries, finished: list.finished };
+    slashRefused.set(base, addon.now());
+  }
+  // The whole lineup of the catalogs holding the group, kept to the channels that say they're in it.
+  const holding = catalogs.filter((c) => c.groups.includes(genre));
+  const inGroup = (entry: Placement) => entry.meta.groups?.includes(genre) === true;
+  const list = await walk(addon, base, holding, (l) => l.entries.filter(inGroup).length >= end, { want: end });
+  return { entries: list.entries.filter(inGroup), finished: list.finished };
+}
+
 export async function listGroup(
   addon: LineupAddon,
   base: string,
@@ -531,7 +572,7 @@ export async function listGroup(
   { startIndex, limit }: { startIndex: number; limit: number }
 ): Promise<{ channels: ListedChannel[]; total: number }> {
   const end = startIndex + limit;
-  const list = await walk(addon, base, groupCatalogs(catalogs, genre), (l) => l.entries.length >= end, { want: end });
+  const list = await groupEntries(addon, base, catalogs, genre, end);
   const state = stateFor(addon);
   const whole = assemble(state, base, catalogs).byKey;
   const channels = list.entries.slice(startIndex, end).map((entry) => {
