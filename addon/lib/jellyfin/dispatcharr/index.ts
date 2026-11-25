@@ -5,10 +5,10 @@ import { DispatcharrClient } from './client';
 import { Guide, type GuideProgramme } from './guide';
 import { CHANNEL_TYPE, channelIdOf, channelMeta, readLineup, selectChannels, type Lineup } from './lineup';
 import { STREAM_GROUP, catchupSources, liveSources } from './playback';
-import { allowedFor, dispatcharrSettings, settingsFingerprint, type DispatcharrSettings } from './settings';
+import { allowedFor, dispatcharrSettings, settingsFingerprint, type DispatcharrSettings, type WhoProfile } from './settings';
 
 export type { GuideProgramme } from './guide';
-export { allowedFor } from './settings';
+export { allowedFor, type WhoProfile } from './settings';
 
 const logger = consola.withTag('JellyfinDispatcharr');
 
@@ -18,6 +18,8 @@ const STATUS_REFUSED_MS = 60 * 60 * 1000;
 // How long a channel's streams are kept for its sources.
 const STREAMS_MS = 60 * 1000;
 const LINEUP_RETRY_MS = 30 * 1000;
+// The longest a chosen version's answer waits for its channel to be switched.
+const SWITCH_WAIT_MS = 3 * 1000;
 
 /**
  * Live TV read straight from Dispatcharr: the lineup, a day of the guide and a channel's sources,
@@ -150,10 +152,21 @@ export class DispatcharrLive {
 
   /**
    * A version was chosen to play. With switching on, one of a channel's streams switches the
-   * channel to it: a running channel before the answer, one that isn't running yet once it starts.
+   * channel to it: a running channel before the answer where Dispatcharr is quick, one that isn't
+   * running yet once it starts. The answer waits `waitMs` at most; a slower switch goes on after it.
    */
-  async chosen(metaId: string, bingeGroup: unknown): Promise<void> {
+  async chosen(metaId: string, bingeGroup: unknown, waitMs = SWITCH_WAIT_MS): Promise<void> {
     if (!this.settings.switchStreams) return;
+    let timer: NodeJS.Timeout | undefined;
+    const waited = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, waitMs);
+      timer.unref?.();
+    });
+    await Promise.race([this.switchChosen(metaId, bingeGroup), waited]);
+    clearTimeout(timer);
+  }
+
+  private async switchChosen(metaId: string, bingeGroup: unknown): Promise<void> {
     const match = STREAM_GROUP.exec(String(bingeGroup ?? ''));
     const id = channelIdOf(metaId);
     const channel = id ? this.lineupHeld?.byMetaId.get(`dispatcharr:${id}`) : undefined;
@@ -221,7 +234,7 @@ export function dispatcharrLive(): DispatcharrLive | null {
 }
 
 /** Dispatcharr Live TV for this configuration's profile, or null to use the stream addon's live catalogs. */
-export function dispatcharrFor(who: { userUUID?: string; profileId?: string | null; userIds?: string[] }): DispatcharrLive | null {
+export function dispatcharrFor(who: { userUUID?: string; profiles?: WhoProfile[] }): DispatcharrLive | null {
   const live = dispatcharrLive();
   return live && allowedFor(live.settings, who) ? live : null;
 }

@@ -396,7 +396,7 @@ function userFor(profile: Profile, serverId: string, configuration?: any, owner?
   const user = userDto(profile.userId, serverId, profile.name, avatarTag(profile));
   if (configuration && typeof configuration === 'object') user.Configuration = { ...user.Configuration, ...configuration };
   if (profile.downloads === false) user.Policy = { ...user.Policy, EnableContentDownloading: false };
-  if (owner?.config && liveTvOffered(owner.config)) user.Policy = { ...user.Policy, EnableLiveTvAccess: true };
+  if (owner?.config && liveTvOffered(owner.config, owner.userUUID)) user.Policy = { ...user.Policy, EnableLiveTvAccess: true };
   // SyncPlay refuses a user held to an age rating, so the app is told not to offer it.
   if (owner?.config && hasAgeRatingCap(scopeConfigToProfile({ ...owner.config }, owner.userUUID, profile.id ?? null))) {
     user.Policy = { ...user.Policy, SyncPlayAccess: 'None' };

@@ -132,14 +132,33 @@ export function settingsFingerprint(settings: DispatcharrSettings): string {
 
 const normalised = (value: string) => value.trim().toLowerCase().replace(/-/g, '');
 
+/** A profile of a configuration: its id (null for the main user) and the Jellyfin user id the server makes from both. */
+export interface WhoProfile {
+  id: string | null;
+  userId: string;
+}
+
 /**
- * Whether a configuration's profile gets Dispatcharr Live TV: every one when the list is empty,
- * else one whose configuration UUID, profile id or Jellyfin user id is listed. Dispatcharr's login
- * is the server's, so an open server lists who may use it.
+ * Whether a configuration gets Dispatcharr Live TV for any of these profiles: every one when the
+ * list is empty. Otherwise only names the server makes, never ones a configuration's owner writes:
+ * a configuration UUID (every profile in it), a profile's Jellyfin user id (made from that UUID and
+ * the profile), or `<configuration UUID>/<profile id>`. A bare profile id is not enough, since any
+ * configuration can give one of its profiles the same id. Dispatcharr's login is the server's, so
+ * an open server lists who may use it.
  */
-export function allowedFor(settings: DispatcharrSettings, who: { userUUID?: string; profileId?: string | null; userIds?: string[] }): boolean {
+export function allowedFor(settings: DispatcharrSettings, who: { userUUID?: string; profiles?: WhoProfile[] }): boolean {
   if (!settings.users.length) return true;
-  const listed = new Set(settings.users.map(normalised));
-  const names = [who.userUUID, who.profileId ?? undefined, ...(who.userIds ?? [])].filter((v): v is string => typeof v === 'string' && !!v);
-  return names.some((name) => listed.has(normalised(name)));
+  if (!who.userUUID) return false;
+  const uuid = normalised(who.userUUID);
+  const profiles = who.profiles ?? [];
+  return settings.users.some((entry) => {
+    const slash = entry.indexOf('/');
+    if (slash < 0) {
+      const name = normalised(entry);
+      return name === uuid || profiles.some((profile) => normalised(profile.userId) === name);
+    }
+    const profileId = entry.slice(slash + 1).trim().toLowerCase();
+    return normalised(entry.slice(0, slash)) === uuid && !!profileId
+      && profiles.some((profile) => profile.id !== null && profile.id.trim().toLowerCase() === profileId);
+  });
 }

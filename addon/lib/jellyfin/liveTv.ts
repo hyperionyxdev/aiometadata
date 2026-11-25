@@ -73,6 +73,8 @@ interface LiveSource {
 
 interface ChannelInfo {
   id: string;
+  /** The source it was read from (`LiveSource.base`), which the caches below keep it under. */
+  base: string;
   type: string;
   metaId: string;
   /** The catalog it was found in, by type and id, which its guide is asked of. */
@@ -267,29 +269,30 @@ async function readSource(base: string): Promise<LiveSource | null> {
 }
 
 /**
- * Live TV is set up for this configuration (a stream addon is named and Live TV is on), told to
- * clients in each user's policy: many show Live TV only to a user it says may use it.
+ * Live TV is set up for this configuration (a stream addon is named, or the server reads
+ * Dispatcharr for it, and Live TV is on), told to clients in each user's policy: many show Live TV
+ * only to a user it says may use it. A stored configuration carries no UUID, so its owner's is passed.
  */
-export function liveTvOffered(config: any): boolean {
-  return liveTvEnabled() && (!!normaliseStreamBase(config?.jellyfinStreamUrl || '') || dispatcharrOffered(config));
+export function liveTvOffered(config: any, userUUID?: string): boolean {
+  return liveTvEnabled() && (!!normaliseStreamBase(config?.jellyfinStreamUrl || '') || dispatcharrOffered(config, userUUID));
 }
 
 /** Dispatcharr Live TV for the profile a configuration is scoped to, where the server has it set up and lets this profile use it. */
 function dispatcharrOf(config: any): DispatcharrLive | null {
+  // The configuration's UUID is the one in the signed-in request's path, set by loadConfig.
   const userUUID = typeof config?.userUUID === 'string' ? config.userUUID : undefined;
   const profileId = typeof config?.jellyfinProfileId === 'string' && config.jellyfinProfileId ? config.jellyfinProfileId : null;
-  return dispatcharrFor({ userUUID, profileId, userIds: userUUID ? [profileUserId(userUUID, profileId)] : [] });
+  return dispatcharrFor({ userUUID, profiles: userUUID ? [{ id: profileId, userId: profileUserId(userUUID, profileId) }] : [] });
 }
 
-/** Whether any profile of a configuration gets Dispatcharr Live TV. */
-function dispatcharrOffered(config: any): boolean {
+/** Whether any profile of a configuration gets Dispatcharr Live TV; a stored configuration carries no UUID, so it is passed. */
+function dispatcharrOffered(config: any, userUUID?: string): boolean {
   const live = dispatcharrLive();
   if (!live) return false;
   if (!live.settings.users.length) return true;
-  const userUUID = typeof config?.userUUID === 'string' ? config.userUUID : undefined;
-  const profiles = listProfiles(config, userUUID ?? '');
-  const userIds = profiles.flatMap((profile) => [profile.id, userUUID ? profile.userId : null]).filter((v): v is string => !!v);
-  return allowedFor(live.settings, { userUUID, userIds });
+  const uuid = userUUID ?? (typeof config?.userUUID === 'string' ? config.userUUID : undefined);
+  if (!uuid) return false;
+  return allowedFor(live.settings, { userUUID: uuid, profiles: listProfiles(config, uuid).map((profile) => ({ id: profile.id, userId: profile.userId })) });
 }
 
 const DIRECT_CATALOG = { type: 'tv', id: 'dispatcharr', name: 'Live TV', groupRequired: false, pages: false, search: true, ids: true, guide: true };
@@ -334,7 +337,7 @@ async function catalogPage(source: LiveSource, catalog: LiveCatalog, extra: Reco
   if (source.direct) {
     // Dispatcharr's lineup is kept by its own module; the whole of what's asked comes in one answer.
     const metas = await source.direct.catalog(extra);
-    for (const meta of metas) rememberChannel(meta, catalog);
+    for (const meta of metas) rememberChannel(source, meta, catalog);
     return metas;
   }
   const url = catalogUrl(source.base, catalog, extra);
@@ -343,7 +346,7 @@ async function catalogPage(source: LiveSource, catalog: LiveCatalog, extra: Reco
   return once(url, async () => {
     const metas = await catalogMetas(url);
     pages.set(url, metas, { ttl: channelsTtlMs() });
-    for (const meta of metas) rememberChannel(meta, catalog);
+    for (const meta of metas) rememberChannel(source, meta, catalog);
     return metas;
   });
 }
@@ -359,13 +362,18 @@ function channelIdFor(type: string, metaId: string): string {
   return encodeJellyfinId({ k: 'channel', t: type, i: metaId });
 }
 
-function rememberChannel(meta: any, catalog: LiveCatalog): ChannelInfo {
+// Channels are kept per source: two sources can name the same channel id (Dispatcharr read straight,
+// and the stream addon passing the Dispatcharr addon's channels on), and neither may see the other's.
+const heldKey = (base: string, id: string) => `${base}|${id}`;
+
+function rememberChannel(source: LiveSource, meta: any, catalog: LiveCatalog): ChannelInfo {
   const type = typeof meta.type === 'string' && LIVE_TYPES.has(meta.type) ? meta.type : catalog.type;
   const id = channelIdFor(type, meta.id);
   const number = meta.channelNumber ?? meta.number;
   const logo = [meta.logo, meta.poster].find((value) => typeof value === 'string' && /^https?:\/\//i.test(value)) ?? null;
   const info: ChannelInfo = {
     id,
+    base: source.base,
     type,
     metaId: meta.id,
     catalog: catalogKey(catalog),
@@ -376,7 +384,7 @@ function rememberChannel(meta: any, catalog: LiveCatalog): ChannelInfo {
     overview: typeof meta.description === 'string' && meta.description.trim() ? meta.description.trim() : null,
     catchupDays: catchupDaysOf(meta),
   };
-  channels.set(id, info, { ttl: channelsTtlMs() });
+  channels.set(heldKey(source.base, id), info, { ttl: channelsTtlMs() });
   return info;
 }
 
@@ -471,9 +479,9 @@ async function channelsById(source: LiveSource, wanted: Channel[]): Promise<Map<
   let missing: Channel[] = [];
   for (const descriptor of wanted) {
     const id = channelIdFor(descriptor.t, descriptor.i);
-    const held = channels.get(id);
+    const held = channels.get(heldKey(source.base, id));
     if (held) found.set(id, held);
-    else if (!gone.has(id)) missing.push(descriptor);
+    else if (!gone.has(heldKey(source.base, id))) missing.push(descriptor);
   }
   for (const catalog of source.catalogs) {
     if (!missing.length) break;
@@ -486,7 +494,7 @@ async function channelsById(source: LiveSource, wanted: Channel[]): Promise<Map<
         return [];
       });
       for (const meta of metas) {
-        const info = rememberChannel(meta, catalog);
+        const info = rememberChannel(source, meta, catalog);
         found.set(info.id, info);
       }
     }
@@ -498,7 +506,7 @@ async function channelsById(source: LiveSource, wanted: Channel[]): Promise<Map<
       try {
         const body = await fetchAddon(`${source.base}/meta/${encodeURIComponent(descriptor.t)}/${encodeURIComponent(descriptor.i)}.json`);
         if (body?.meta?.id) {
-          const info = rememberChannel({ ...body.meta, type: descriptor.t }, catalog);
+          const info = rememberChannel(source, { ...body.meta, type: descriptor.t }, catalog);
           found.set(info.id, info);
         }
       } catch (error: any) {
@@ -508,7 +516,7 @@ async function channelsById(source: LiveSource, wanted: Channel[]): Promise<Map<
   }
   for (const descriptor of missing) {
     const id = channelIdFor(descriptor.t, descriptor.i);
-    if (!found.has(id)) gone.set(id, true);
+    if (!found.has(id)) gone.set(heldKey(source.base, id), true);
   }
   return found;
 }
@@ -577,7 +585,7 @@ async function fetchGuideDay(source: LiveSource, catalog: LiveCatalog, wanted: C
   }
   const store = (metas: any[]) => {
     for (const meta of metas) {
-      const info = rememberChannel(meta, catalog);
+      const info = rememberChannel(source, meta, catalog);
       guides.set(guideKey(source.base, info, day), programmesOf(meta.videos), { ttl: guideTtlMs() });
     }
   };
@@ -761,7 +769,7 @@ function catchesUp(channel: ChannelInfo, programme: Programme, now: number): boo
 
 function numberOf(channel: ChannelInfo): string | null {
   if (channel.number) return channel.number;
-  const place = positions.get(channel.id);
+  const place = positions.get(heldKey(channel.base, channel.id));
   return place ? String(place) : null;
 }
 
@@ -1011,13 +1019,16 @@ async function channelPage(
     const page = await listChannels(source, segments, start, limit);
     listed = page.listed;
     total = page.total;
-    if (want.group === undefined) listed.forEach((entry, i) => positions.set(rememberChannel(entry.meta, entry.catalog).id, start + i + 1));
+    if (want.group === undefined) listed.forEach((entry, i) => {
+      const info = rememberChannel(source, entry.meta, entry.catalog);
+      positions.set(heldKey(info.base, info.id), start + i + 1);
+    });
   }
 
   const found = new Map<string, ChannelInfo>();
   const ids: string[] = [];
   for (const entry of listed) {
-    const info = rememberChannel(entry.meta, entry.catalog);
+    const info = rememberChannel(source, entry.meta, entry.catalog);
     if (found.has(info.id)) continue;
     found.set(info.id, info);
     ids.push(info.id);
@@ -1063,7 +1074,7 @@ async function channelsAsked(req: any, scope: Scope, source: LiveSource): Promis
     return named.map((d) => found.get(channelIdFor(d.t, d.i))).filter((c): c is ChannelInfo => !!c);
   }
   const page = await listChannels(source, segmentsFor(source, {}), 0, 100);
-  return page.listed.map((entry) => rememberChannel(entry.meta, entry.catalog));
+  return page.listed.map((entry) => rememberChannel(source, entry.meta, entry.catalog));
 }
 
 async function answerProgrammes(req: any, res: any, recommended: boolean): Promise<void> {
@@ -1092,7 +1103,7 @@ async function answerProgrammes(req: any, res: any, recommended: boolean): Promi
       const found = await channelsById(source, favourites);
       const page = await listChannels(source, segmentsFor(source, {}), 0, Math.max(limit * 2, 60));
       const seen = new Set<string>();
-      list = [...favourites.map((d) => found.get(channelIdFor(d.t, d.i))), ...page.listed.map((e) => rememberChannel(e.meta, e.catalog))]
+      list = [...favourites.map((d) => found.get(channelIdFor(d.t, d.i))), ...page.listed.map((e) => rememberChannel(source, e.meta, e.catalog))]
         .filter((c): c is ChannelInfo => !!c && !seen.has(c.id) && !!seen.add(c.id));
     } else {
       list = await channelsAsked(req, scope, source);

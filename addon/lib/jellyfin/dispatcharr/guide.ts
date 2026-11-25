@@ -15,7 +15,18 @@ const FAILED_MS = 60 * 1000;
 const EPG_IDS_MS = 6 * 60 * 60 * 1000;
 // The guide-id list is read again this soon when a channel's guide is one it lacks.
 const EPG_IDS_RECHECK_MS = 60 * 1000;
-const KEPT_DAYS = 8;
+// The guide is read from a week back to a week ahead, the window /LiveTv/GuideInfo reports, plus
+// the day before it (the Live TV code asks for that day too, for programmes begun before midnight).
+// A day outside it answers with no programmes and is never read; kept days are held within it.
+const WINDOW_DAYS = 7;
+
+/** The first and last UTC day starts that are read. */
+function window(now = Date.now()): { first: number; last: number } {
+  return {
+    first: Math.floor((now - WINDOW_DAYS * DAY_MS) / DAY_MS) * DAY_MS - DAY_MS,
+    last: Math.floor((now + WINDOW_DAYS * DAY_MS) / DAY_MS) * DAY_MS,
+  };
+}
 
 /** A programme in the Live TV code's shape, with what Dispatcharr's guide adds. */
 export interface GuideProgramme {
@@ -194,15 +205,16 @@ export class Guide {
     } catch (error: any) {
       logger.warn(`Dispatcharr's guide for ${new Date(start).toISOString().slice(0, 10)} could not be read: ${error?.message || error}`);
       this.failedAt.set(start, Date.now());
+      this.trim();
       return this.days.get(start) ?? null;
     }
   }
 
-  /** Keeps from a week back to a week ahead. */
+  /** Drops kept days and failures outside the window, so neither grows while the days go by. */
   private trim(): void {
-    const today = Math.floor(Date.now() / DAY_MS) * DAY_MS;
-    for (const key of this.days.keys()) {
-      if (key < today - KEPT_DAYS * DAY_MS || key > today + KEPT_DAYS * DAY_MS) this.days.delete(key);
+    const { first, last } = window();
+    for (const held of [this.days, this.failedAt]) {
+      for (const key of held.keys()) if (key < first || key > last) held.delete(key);
     }
   }
 
@@ -213,6 +225,8 @@ export class Guide {
   async day(day: string, lineup: Lineup | null): Promise<Day | null> {
     const start = dayStart(day);
     if (!Number.isFinite(start)) return null;
+    const { first, last } = window();
+    if (start < first || start > last) return { at: Date.now(), byKey: new Map(), epgIds: new Map(), made: new Map() };
     const kept = this.days.get(start);
     const age = kept ? Date.now() - kept.at : Infinity;
     if (kept && age < this.cacheMs) return kept;

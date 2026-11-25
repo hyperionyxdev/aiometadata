@@ -2,13 +2,14 @@
 // Copyright (C) 2026 cedya77 and AIOMetadata contributors, see NOTICE
 //
 // Runs the Dispatcharr Live TV code against a fake Dispatcharr, with invented channels and guide.
-// Run with: npx -y node@22 node_modules/.bin/ts-node --transpile-only addon/lib/jellyfin/dispatcharr/dispatcharr.test.ts
+// How to run it: docs/live-tv-dispatcharr.md, "Tests".
 import { after, before, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'http';
+import zlib from 'zlib';
 import { AddressInfo } from 'net';
 import { DispatcharrLive, dispatcharrLive } from './index';
-import { hostHeaderFor } from './client';
+import { DispatcharrClient, hostHeaderFor } from './client';
 import { shownSubtitle } from './guide';
 import { allowedFor, dispatcharrSettings, type DispatcharrSettings } from './settings';
 import { timeshiftStamp } from './playback';
@@ -24,6 +25,7 @@ let running: Array<[string, number]> = [];
 let switched: Array<[string, number]> = [];
 let epgRows: any[] = [];
 let down = false;
+let switchDelayMs = 0;
 
 const stream = (id: number, account: number, resolution: string | null) => ({
   id, name: `Feed ${id}`, m3u_account: account, stream_hash: `hash${id}`, is_custom: false,
@@ -80,8 +82,12 @@ before(async () => {
       const signedIn = url.pathname.startsWith('/api/accounts/') || url.pathname === '/player_api.php'
         || req.headers['x-api-key'] === 'KEY' || /^Bearer A[12]$/.test(String(req.headers.authorization ?? ''));
       const [status, body] = !handler ? [404, '<html>not here</html>'] : !signedIn ? [401, {}] : handler(text ? JSON.parse(text) : undefined, url.searchParams);
-      res.writeHead(status, { 'content-type': 'application/json' });
-      res.end(typeof body === 'string' ? body : JSON.stringify(body));
+      const send = () => {
+        res.writeHead(status, { 'content-type': 'application/json' });
+        res.end(typeof body === 'string' ? body : JSON.stringify(body));
+      };
+      if (url.pathname.startsWith('/proxy/ts/change_stream/') && switchDelayMs) setTimeout(send, switchDelayMs);
+      else send();
     });
   });
   await new Promise<void>((resolve) => fake.listen(0, '127.0.0.1', resolve));
@@ -98,6 +104,7 @@ beforeEach(() => {
   switched = [];
   epgRows = [{ id: 3, tvg_id: 'news.example', name: 'News' }];
   down = false;
+  switchDelayMs = 0;
 });
 
 function settings(overrides: Partial<DispatcharrSettings> = {}): DispatcharrSettings {
@@ -152,13 +159,52 @@ test('settings come from the environment', () => {
   });
 });
 
-test('who may use it: everyone when no one is listed, else a listed configuration, profile or user', () => {
+test('who may use it: everyone when no one is listed, else names the server makes', () => {
   assert.ok(allowedFor(settings(), { userUUID: 'anything' }));
-  const listed = settings({ users: ['1111-2222', 'kids-profile'] });
-  assert.ok(allowedFor(listed, { userUUID: '11112222' }));
-  assert.ok(allowedFor(listed, { userUUID: 'other', profileId: 'Kids-Profile' }));
-  assert.ok(!allowedFor(listed, { userUUID: 'other', profileId: 'adults' }));
+  const kids = { id: 'kids-profile', userId: 'aaaa1111' };
+  const listed = settings({ users: ['1111-2222', 'AAAA-1111', '3333-4444/Kids-Profile'] });
+  // A configuration UUID admits all its profiles; a Jellyfin user id (made from the UUID) admits that profile.
+  assert.ok(allowedFor(listed, { userUUID: '11112222', profiles: [{ id: null, userId: '11112222' }] }));
+  assert.ok(allowedFor(listed, { userUUID: '99999999', profiles: [kids] }));
+  // <configuration>/<profile> needs both parts.
+  assert.ok(allowedFor(listed, { userUUID: '3333-4444', profiles: [{ id: 'kids-profile', userId: 'bbbb' }] }));
+  assert.ok(!allowedFor(listed, { userUUID: '5555-6666', profiles: [{ id: 'kids-profile', userId: 'cccc' }] }));
+  assert.ok(!allowedFor(listed, { userUUID: '3333-4444', profiles: [{ id: null, userId: '33334444x' }] }));
+  // A bare profile id is any configuration's to choose, so it admits no one.
+  assert.ok(!allowedFor(settings({ users: ['kids-profile'] }), { userUUID: 'other', profiles: [{ id: 'kids-profile', userId: 'dddd' }] }));
   assert.ok(!allowedFor(listed, {}));
+});
+
+// ---------- Answers cut off ----------
+
+test('an answer cut off, gzipped or not, or one that never finishes, fails rather than hanging', async () => {
+  const server = http.createServer((req, res) => {
+    if (req.url === '/slow') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      const drip = setInterval(() => res.write(' '), 50);
+      res.on('close', () => clearInterval(drip));
+      return;
+    }
+    const gzip = req.url !== '/plain';
+    res.writeHead(200, { 'content-type': 'application/json', ...(gzip ? { 'content-encoding': 'gzip' } : {}) });
+    res.write(gzip ? zlib.gzipSync(Buffer.from(`[${'1,'.repeat(100000)}1]`)).subarray(0, 200) : '[1,2');
+    setTimeout(() => req.socket.destroy(), 30);
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  const at = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    const client = new DispatcharrClient(settings({ url: at, timeoutMs: 600 }));
+    for (const path of ['/gzip', '/plain']) await assert.rejects(client.get(path), /could not be read/);
+    const started = Date.now();
+    await assert.rejects(client.get('/slow'), /no answer within/);
+    assert.ok(Date.now() - started < 2000);
+    // A shared read made of such requests settles too, for everyone waiting on it.
+    const cut = new DispatcharrLive(settings({ url: at, timeoutMs: 600 }));
+    const results = await Promise.allSettled([cut.lineup(), cut.lineup(), cut.guideDay(today, ['dispatcharr:7'])]);
+    assert.ok(results.every((r) => r.status === 'rejected'));
+  } finally {
+    server.close();
+  }
 });
 
 // ---------- Channels ----------
@@ -332,6 +378,28 @@ test('a channel given a guide the kept list lacks reads the list again', async (
   assert.equal(seen.filter((r) => r.path === '/api/epg/epgdata/').length, 1);
 });
 
+test('a day outside the guide\'s window is never read, and failures are kept within the window', async () => {
+  const a = live();
+  await a.lineup();
+  const far = iso(now + 30 * 86400000).slice(0, 10);
+  const past = iso(now - 30 * 86400000).slice(0, 10);
+  for (const day of [far, past]) {
+    const answer = (await a.guideDay(day, ['dispatcharr:7']))!;
+    assert.deepEqual(answer.get('dispatcharr:7'), []);
+  }
+  assert.equal(seen.filter((r) => r.path === '/api/epg/grid/').length, 0);
+  // A week ahead is still read.
+  await a.guideDay(iso(now + 7 * 86400000).slice(0, 10), ['dispatcharr:7']);
+  assert.equal(seen.filter((r) => r.path === '/api/epg/grid/').length, 1);
+
+  const g = a.guide as any;
+  g.failedAt.set(Date.parse(`${past}T00:00:00Z`), Date.now());
+  down = true;
+  for (let d = -8; d <= 7; d++) await a.guideDay(iso(now + d * 86400000).slice(0, 10), ['dispatcharr:7']);
+  assert.ok(g.failedAt.size <= 16);
+  assert.ok(!g.failedAt.has(Date.parse(`${past}T00:00:00Z`)));
+});
+
 test('a day that cannot be read answers null, and is not asked for again at once', async () => {
   const a = live();
   await a.lineup();
@@ -409,6 +477,18 @@ test('switching: a stream chosen switches its running channel; Auto and catch-up
   await a.chosen('dispatcharr:7', streams[1].behaviorHints.bingeGroup);
   await live().chosen('dispatcharr:7', streams[2].behaviorHints.bingeGroup);
   assert.deepEqual(switched, []);
+});
+
+test('a slow switch doesn\'t hold up the answer, and still happens', async () => {
+  const a = live({ switchStreams: true });
+  const streams = await a.streams('tv', 'dispatcharr:7');
+  switchDelayMs = 500;
+  const started = Date.now();
+  // Dispatcharr answers the switch after half a second; the answer waits a tenth at most.
+  await a.chosen('dispatcharr:7', streams[1].behaviorHints.bingeGroup, 100);
+  assert.ok(Date.now() - started < 400);
+  await new Promise((r) => setTimeout(r, 700));
+  assert.deepEqual(switched, [['uuid-7', 11]]);
 });
 
 test('a channel whose streams cannot be read still plays as itself', async () => {

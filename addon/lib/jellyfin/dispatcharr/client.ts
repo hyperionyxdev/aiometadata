@@ -57,23 +57,47 @@ export class DispatcharrClient {
     const timeoutMs = this.settings.timeoutMs;
     return new Promise((resolve, reject) => {
       const client = url.protocol === 'https:' ? https : http;
+      let settled = false;
+      // Every way a request can end comes through here once: answered, refused, cut off or out of time.
+      const finish = (error: DispatcharrError | null, answer?: Answer) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(deadline);
+        if (error) {
+          req.destroy();
+          reject(error);
+        } else {
+          resolve(answer as Answer);
+        }
+      };
+      const cutOff = (error?: any) => finish(new DispatcharrError(`Dispatcharr ${label} could not be read: ${error?.message || 'the answer was cut off'}`));
+      // A deadline for the whole request, answer included: an idle-socket timeout alone never fires
+      // once the socket has gone, and a body arriving slowly would never hit it either.
+      const deadline = setTimeout(() => finish(new DispatcharrError(`Dispatcharr ${label} gave no answer within ${Math.round(timeoutMs / 1000)}s`)), timeoutMs);
+      deadline.unref?.();
       const req = client.request(url, { method: init.method ?? 'GET', headers, timeout: timeoutMs }, (res) => {
+        // Piping doesn't pass the response's own failures on to the gunzip stream, so both are watched.
+        res.on('error', cutOff);
+        res.on('aborted', () => cutOff());
+        res.on('close', () => {
+          if (!res.complete) cutOff();
+        });
         const stream = res.headers['content-encoding'] === 'gzip' ? res.pipe(zlib.createGunzip()) : res;
         const chunks: Buffer[] = [];
         let total = 0;
         stream.on('data', (chunk: Buffer) => {
           total += chunk.length;
           if (total > MAX_BYTES) {
-            req.destroy(new DispatcharrError(`Dispatcharr ${label} answered more than ${MAX_BYTES} bytes`));
+            finish(new DispatcharrError(`Dispatcharr ${label} answered more than ${MAX_BYTES} bytes`));
             return;
           }
           chunks.push(chunk);
         });
-        stream.on('error', (error: any) => reject(new DispatcharrError(`Dispatcharr ${label} could not be read: ${error?.message || error}`)));
-        stream.on('end', () => resolve({ status: res.statusCode ?? 0, text: Buffer.concat(chunks).toString('utf8') }));
+        stream.on('error', cutOff);
+        stream.on('end', () => finish(null, { status: res.statusCode ?? 0, text: Buffer.concat(chunks).toString('utf8') }));
       });
-      req.on('timeout', () => req.destroy(new DispatcharrError(`Dispatcharr ${label} gave no answer within ${Math.round(timeoutMs / 1000)}s`)));
-      req.on('error', (error: any) => reject(error instanceof DispatcharrError ? error : new DispatcharrError(`Dispatcharr ${label} could not be reached (${error?.code || 'error'})`)));
+      req.on('timeout', () => finish(new DispatcharrError(`Dispatcharr ${label} gave no answer within ${Math.round(timeoutMs / 1000)}s`)));
+      req.on('error', (error: any) => finish(error instanceof DispatcharrError ? error : new DispatcharrError(`Dispatcharr ${label} could not be reached (${error?.code || 'error'})`)));
       req.end(body);
     });
   }

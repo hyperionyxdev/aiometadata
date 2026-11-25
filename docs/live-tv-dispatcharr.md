@@ -48,13 +48,13 @@ Clients other than Hyperion are sent a channel as HLS, as on `live-tv`.
 | `JELLYFIN_DISPATCHARR_STREAM_URL` | Where players reach Dispatcharr's links and logos. Defaults to `JELLYFIN_DISPATCHARR_URL`, which is only right when clients can reach that address too. |
 | `JELLYFIN_DISPATCHARR_XC_USERNAME`, `JELLYFIN_DISPATCHARR_XC_PASSWORD` | Optional, recommended: an XC login (a Dispatcharr username and that user's XC password). Only that user's channels are listed (their level, adult setting and channel profiles), Auto plays as that user, and a programme that has ended plays from catch-up on channels that have it, within their catch-up days. Without it there is no catch-up. |
 | `JELLYFIN_DISPATCHARR_OUTPUT_FORMAT` | Optional: `mpegts`, `hls` or `fmp4` (`ts`, `m3u8`, `mp4` too), asked of Dispatcharr's links. Empty for Dispatcharr's own. |
-| `JELLYFIN_DISPATCHARR_USERS` | Optional: who gets this Live TV, comma separated. Each entry is a configuration UUID (every profile in it), a profile id, or a profile's Jellyfin user id. Empty: every configuration on this server. Anyone not listed gets the stream addon's Live TV, as on `live-tv`. |
+| `JELLYFIN_DISPATCHARR_USERS` | Optional: who gets this Live TV, comma separated. Each entry is a configuration UUID (every profile in it), a profile's Jellyfin user id (the id clients see, which the server makes from the configuration and the profile), or `<configuration UUID>/<profile id>`. A profile id on its own isn't accepted: any configuration can give one of its profiles the same id. Empty: every configuration on this server. Anyone not listed gets the stream addon's Live TV, as on `live-tv`. |
 | `JELLYFIN_DISPATCHARR_GROUPS` | Optional: only these channel groups, comma separated, in this order. Empty: all, in channel-number order. |
 | `JELLYFIN_DISPATCHARR_AUTO_SOURCE` | `true` (default): a channel's first version is "Auto", the channel as it is, which Dispatcharr fails over by itself. `false` lists only the streams (Auto stays for a channel with none). |
-| `JELLYFIN_DISPATCHARR_SWITCH_STREAMS` | `false` (default). `true`: every version of a channel plays the channel itself, and choosing one of its streams switches the channel to it with Dispatcharr's own switcher (a running channel before playback starts, one that isn't running yet once it does). Needs an Admin login. |
+| `JELLYFIN_DISPATCHARR_SWITCH_STREAMS` | `false` (default). `true`: every version of a channel plays the channel itself, and choosing one of its streams switches the channel to it with Dispatcharr's own switcher (a running channel before playback starts, one that isn't running yet once it does). The answer waits at most three seconds for a switch; a slower one finishes afterwards. Needs an Admin login. |
 | `JELLYFIN_DISPATCHARR_NAME` | The label in front of Auto and catch-up ("Dispatcharr · Auto"). Default `Dispatcharr`. |
-| `JELLYFIN_DISPATCHARR_TIMEOUT` | Seconds to wait for Dispatcharr. Default 90: a big lineup takes a while. |
-| `JELLYFIN_DISPATCHARR_CACHE_SECONDS` | How long the channel list and a day of the guide are used before they are read again. Default 300. A kept copy answers at once while a new one is read; a guide day kept for over 30 minutes waits for the new read instead. |
+| `JELLYFIN_DISPATCHARR_TIMEOUT` | Seconds to wait for each request to Dispatcharr, its whole answer included. Default 90: a big lineup takes a while. |
+| `JELLYFIN_DISPATCHARR_CACHE_SECONDS` | How long the channel list and a day of the guide are used before they are read again. Default 300. A kept copy answers at once while a new one is read; a guide day kept for over 30 minutes waits for the new read instead. Only the days from a week back to a week ahead (the window `/LiveTv/GuideInfo` reports) are read; others answer with no programmes. |
 | `JELLYFIN_DISPATCHARR_HOST_HEADER` | Optional: the Host header to send. Dispatcharr refuses a host name with an underscore (a container named `dispatcharr_vpn`); for one, `localhost` is sent unless this is set. |
 
 `JELLYFIN_LIVE_TV=false` still turns Live TV off altogether.
@@ -100,7 +100,8 @@ list your own configuration (or profiles), or they will get your channels too.
 
 Channel and programme ids are made from the same meta ids the Dispatcharr addon gave
 (`dispatcharr:<channel id>`, type `tv`), so favourite channels carry over where the stream addon
-passed those ids on unchanged.
+passed those ids on unchanged. A configuration that still gets the stream addon's channels under
+the same ids is kept apart: the server holds each source's channels separately.
 
 ## What clients get
 
@@ -130,9 +131,13 @@ or `dispatcharr-catchup`).
 ## Tests
 
 ```sh
-npx -y node@22 node_modules/.bin/ts-node --skip-project --transpile-only \
-  --compiler-options '{"module":"commonjs","target":"es2022","esModuleInterop":true,"ignoreDeprecations":"6.0"}' \
-  addon/lib/jellyfin/dispatcharr/dispatcharr.test.ts
+for test in dispatcharr liveTv.dispatcharr; do
+  npx -y node@22 node_modules/.bin/ts-node --skip-project --transpile-only \
+    --compiler-options '{"module":"commonjs","target":"es2022","esModuleInterop":true,"ignoreDeprecations":"6.0","allowJs":true}' \
+    addon/lib/jellyfin/dispatcharr/$test.test.ts
+done
 ```
 
-They run the code against a fake Dispatcharr with invented channels.
+The first runs the Dispatcharr code against a fake Dispatcharr; the second runs the Live TV
+routes with one configuration on Dispatcharr and another on a fake stream addon, storage stubbed.
+Both use invented channels.
