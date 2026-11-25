@@ -19,7 +19,18 @@ export interface Programme {
   season?: number;
   episode?: number;
   imdbId?: string;
+  /** The episode's own name, or the line a guide shows under the programme's. */
+  episodeTitle?: string;
+  /** Marked by the guide as live (a game, a broadcast as it happens) or not; unset where it doesn't say. */
+  live?: boolean;
+  isNew?: boolean;
+  premiere?: boolean;
+  finale?: boolean;
+  /** Made up by the guide for a channel with no real listings. */
+  placeholder?: boolean;
 }
+
+const flag = (value: unknown): boolean | undefined => (typeof value === 'boolean' ? value : undefined);
 
 // Sliced, as a filtered list keeps spare room.
 const strings = (value: unknown): string[] =>
@@ -55,6 +66,13 @@ export function programmesOf(entry: any): Programme[] {
     if (episode !== undefined) programme.episode = episode;
     const imdbId = shortOf(video.imdbId);
     if (imdbId) programme.imdbId = imdbId;
+    const episodeTitle = clipped(video.episodeTitle, MAX_NAME);
+    if (episodeTitle) programme.episodeTitle = episodeTitle;
+    const live = flag(video.isLive);
+    if (live !== undefined) programme.live = live;
+    for (const key of ['isNew', 'premiere', 'finale', 'placeholder'] as const) {
+      if (flag(video[key]) === true) programme[key] = true;
+    }
     parsed.push(programme);
   }
   parsed.sort((a, b) => a.start - b.start || b.end - a.end);

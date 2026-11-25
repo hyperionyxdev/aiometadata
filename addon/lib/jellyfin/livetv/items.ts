@@ -27,7 +27,9 @@ export function liveTvViewId(deps: Pick<ItemDeps, 'encodeId'>): string {
 
 export function liveTvView(deps: ItemDeps, serverId: string, { guide = false, groups = false }: { guide?: boolean; groups?: boolean } = {}): any {
   const view = { ...deps.collectionFolder(liveTvViewId(deps), serverId, 'Live TV', 'livetv', null), Type: 'UserView' };
-  return guide || groups ? { ...view, aiostreams: { ...(guide && { guide }), ...(groups && { groups }) } } : view;
+  // Both said, true or false: a client offers its own groups (sports, news, ...) only where the
+  // view says it has none of its own.
+  return { ...view, aiostreams: { guide, groups } };
 }
 
 export function groupItem(deps: ItemDeps, serverId: string, catalog: Pick<LiveCatalog, 'type' | 'id'>, name: string): any {
@@ -92,6 +94,7 @@ export function channelItem(
     item.ChannelNumber = channel.number;
     item.Number = channel.number;
   }
+  if (channel.meta.groups?.length) item.Genres = channel.meta.groups;
   if (airing) item.CurrentProgram = programItem(deps, serverId, channel, airing, { parts });
   return item;
 }
@@ -133,11 +136,23 @@ export function programItem(
     if (people.length) item.People = people;
   }
   if (programme.imdbId) item.ProviderIds = { Imdb: programme.imdbId };
-  if (catchup) item.aiostreams = { catchup: true };
-  if (opened && id && (programme.image || programme.background)) {
-    deps.rememberImages(serverId, id, { primary: programme.image, backdrop: programme.background });
+  if (programme.episodeTitle) item.EpisodeTitle = programme.episodeTitle;
+  if (programme.live !== undefined) {
+    item.IsLive = programme.live;
+    item.IsNew = programme.isNew === true;
+    item.IsPremiere = programme.premiere === true;
+  }
+  const extras = {
+    ...(catchup && { catchup: true }),
+    ...(programme.placeholder && { placeholder: true }),
+    ...(programme.finale && { finale: true }),
+  };
+  if (Object.keys(extras).length) item.aiostreams = extras;
+  // The still in lists too (a guide's blocks, what's on now); the backdrop where it's opened.
+  if (id && (programme.image || (opened && programme.background))) {
+    deps.rememberImages(serverId, id, { primary: programme.image, ...(opened && { backdrop: programme.background }) });
     if (programme.image) item.ImageTags = { Primary: deps.imageTag(programme.image) };
-    if (programme.background) item.BackdropImageTags = [deps.imageTag(programme.background)];
+    if (opened && programme.background) item.BackdropImageTags = [deps.imageTag(programme.background)];
   }
   return item;
 }
