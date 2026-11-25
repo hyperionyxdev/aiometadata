@@ -11,7 +11,8 @@ import { decodeJellyfinId, encodeJellyfinId, hashJellyfinId, isHashedJellyfinId,
 import { EMPTY_USER_DATA, collectionFolder, itemList, namedItem } from './dto';
 import { imageTag } from './imageTags';
 import { recallImages, rememberImages } from './items';
-import { listProfiles, profileKey } from './profiles';
+import { listProfiles, profileKey, profileUserId } from './profiles';
+import { allowedFor, dispatcharrFor, dispatcharrLive, type DispatcharrLive } from './dispatcharr';
 import {
   coalesce,
   describeStatus,
@@ -38,6 +39,10 @@ const logger = consola.withTag('JellyfinLiveTv');
  * extra gives a day of each channel's programmes as its videos, and channels and
  * programmes play through the addon's stream resource. Nothing here is specific
  * to one addon; an aggregator passing a live addon's catalogs on works the same.
+ *
+ * Where the server is set up to read Dispatcharr itself (JELLYFIN_DISPATCHARR_URL, see
+ * docs/live-tv-dispatcharr.md), Dispatcharr stands in for the addon: one lineup whose channels,
+ * guide and sources come straight from it (`LiveSource.direct`), served by the same code.
  */
 
 type Channel = Extract<Descriptor, { k: 'channel' }>;
@@ -62,6 +67,8 @@ interface LiveSource {
   catalogs: LiveCatalog[];
   /** The addon answers meta requests for its live types. */
   meta: boolean;
+  /** Read straight from Dispatcharr rather than from the addon's resources. */
+  direct?: DispatcharrLive;
 }
 
 interface ChannelInfo {
@@ -87,6 +94,14 @@ interface Programme {
   season: number | null;
   episode: number | null;
   thumbnail: string | null;
+  // What a guide read straight from Dispatcharr adds; the addon's guide leaves them out.
+  episodeTitle?: string;
+  genres?: string[];
+  live?: boolean;
+  isNew?: boolean;
+  premiere?: boolean;
+  finale?: boolean;
+  placeholder?: boolean;
 }
 
 interface Segment {
@@ -114,6 +129,10 @@ const FAVOURITES_PREF = 'livetv-favourites';
 const FAVOURITES_CLIENT = 'aiometadata';
 
 export const LIVE_VIEW_ID = encodeJellyfinId({ k: 'livetv' });
+
+const DIRECT_BASE = 'dispatcharr:';
+// Dispatcharr's guide keeps itself and says when to read it again, so a channel's day is asked of it each minute.
+const DIRECT_GUIDE_TTL_MS = 60 * 1000;
 
 function liveTvEnabled(): boolean {
   const { getSetting } = require('../settingsService');
@@ -252,12 +271,41 @@ async function readSource(base: string): Promise<LiveSource | null> {
  * clients in each user's policy: many show Live TV only to a user it says may use it.
  */
 export function liveTvOffered(config: any): boolean {
-  return liveTvEnabled() && !!normaliseStreamBase(config?.jellyfinStreamUrl || '');
+  return liveTvEnabled() && (!!normaliseStreamBase(config?.jellyfinStreamUrl || '') || dispatcharrOffered(config));
 }
 
-/** The stream addon's live catalogs for this configuration, or null when it has none. */
+/** Dispatcharr Live TV for the profile a configuration is scoped to, where the server has it set up and lets this profile use it. */
+function dispatcharrOf(config: any): DispatcharrLive | null {
+  const userUUID = typeof config?.userUUID === 'string' ? config.userUUID : undefined;
+  const profileId = typeof config?.jellyfinProfileId === 'string' && config.jellyfinProfileId ? config.jellyfinProfileId : null;
+  return dispatcharrFor({ userUUID, profileId, userIds: userUUID ? [profileUserId(userUUID, profileId)] : [] });
+}
+
+/** Whether any profile of a configuration gets Dispatcharr Live TV. */
+function dispatcharrOffered(config: any): boolean {
+  const live = dispatcharrLive();
+  if (!live) return false;
+  if (!live.settings.users.length) return true;
+  const userUUID = typeof config?.userUUID === 'string' ? config.userUUID : undefined;
+  const profiles = listProfiles(config, userUUID ?? '');
+  const userIds = profiles.flatMap((profile) => [profile.id, userUUID ? profile.userId : null]).filter((v): v is string => !!v);
+  return allowedFor(live.settings, { userUUID, userIds });
+}
+
+const DIRECT_CATALOG = { type: 'tv', id: 'dispatcharr', name: 'Live TV', groupRequired: false, pages: false, search: true, ids: true, guide: true };
+
+/** Dispatcharr as a live source: one lineup, its groups known once its channels have been read. */
+async function directSource(live: DispatcharrLive): Promise<LiveSource> {
+  // Unreachable before its first read: no groups, and the channel reads that follow answer 503.
+  const lineup = await live.lineup().catch(() => live.known());
+  return { base: DIRECT_BASE, catalogs: [{ ...DIRECT_CATALOG, groups: lineup?.groups ?? [] }], meta: false, direct: live };
+}
+
+/** The live catalogs for this configuration (Dispatcharr's, or the stream addon's), or null when it has none. */
 async function liveSourceFor(config: any): Promise<LiveSource | null> {
   if (!liveTvEnabled()) return null;
+  const direct = dispatcharrOf(config);
+  if (direct) return directSource(direct);
   const base = normaliseStreamBase(config?.jellyfinStreamUrl || '');
   if (!base) return null;
   const source = await readSource(base);
@@ -283,6 +331,12 @@ async function catalogMetas(url: string): Promise<any[]> {
 }
 
 async function catalogPage(source: LiveSource, catalog: LiveCatalog, extra: Record<string, string | undefined>): Promise<any[]> {
+  if (source.direct) {
+    // Dispatcharr's lineup is kept by its own module; the whole of what's asked comes in one answer.
+    const metas = await source.direct.catalog(extra);
+    for (const meta of metas) rememberChannel(meta, catalog);
+    return metas;
+  }
   const url = catalogUrl(source.base, catalog, extra);
   const held = pages.get(url);
   if (held) return held;
@@ -339,9 +393,10 @@ function segmentsFor(source: LiveSource, want: { group?: string; search?: string
       // all the same (reading the whole lineup for it took a long time), the channels kept to the
       // group here; where that finds none or fails, and the lineup can be read whole, it's read
       // whole for the group, and from then on for a lineup that failed.
-      if (want.group.includes('/') && !catalog.groupRequired && slashRefused.has(slashKey(source, catalog))) out.push({ catalog, only: want.group });
-      else if (want.group.includes('/')) out.push({ catalog, genre: want.group, only: want.group, wholeIfNone: !catalog.groupRequired });
-      else out.push({ catalog, genre: want.group });
+      // Dispatcharr is asked for no group by its name in a path, so its groups need none of this.
+      if (source.direct || !want.group.includes('/')) out.push({ catalog, genre: want.group });
+      else if (!catalog.groupRequired && slashRefused.has(slashKey(source, catalog))) out.push({ catalog, only: want.group });
+      else out.push({ catalog, genre: want.group, only: want.group, wholeIfNone: !catalog.groupRequired });
     } else if (catalog.groupRequired) {
       for (const group of catalog.groups) out.push({ catalog, genre: group });
     } else {
@@ -511,6 +566,15 @@ function programmesOf(videos: unknown): Programme[] {
 
 /** One day of a catalog's guide for these channels: by their ids where the catalog takes them, else the whole lineup's. */
 async function fetchGuideDay(source: LiveSource, catalog: LiveCatalog, wanted: ChannelInfo[], day: string): Promise<boolean> {
+  if (source.direct) {
+    const answer = await source.direct.guideDay(day, wanted.map((c) => c.metaId)).catch((error: any) => {
+      logger.debug(`The guide for ${day} from Dispatcharr failed: ${error?.message || error}`);
+      return null;
+    });
+    if (!answer) return false;
+    for (const channel of wanted) guides.set(guideKey(source.base, channel, day), answer.get(channel.metaId) ?? [], { ttl: DIRECT_GUIDE_TTL_MS });
+    return true;
+  }
   const store = (metas: any[]) => {
     for (const meta of metas) {
       const info = rememberChannel(meta, catalog);
@@ -701,10 +765,27 @@ function numberOf(channel: ChannelInfo): string | null {
   return place ? String(place) : null;
 }
 
+/** A guide's categories as the kinds a client groups programmes by, the way Jellyfin reads an XMLTV guide's. */
+function kindsOf(genres: string[]): { IsSports: boolean; IsNews: boolean; IsMovie: boolean; IsKids: boolean } {
+  const has = (pattern: RegExp) => genres.some((genre) => pattern.test(genre));
+  return { IsSports: has(/sport/i), IsNews: has(/\bnews\b/i), IsMovie: has(/\b(movie|film)s?\b/i), IsKids: has(/\b(kids?|child|children)\b/i) };
+}
+
+/** What a programme carries beyond Jellyfin's own fields: catch-up, and a guide's own marks. */
+function programmeExtras(channel: ChannelInfo, programme: Programme, now: number): Record<string, true> | null {
+  const extras: Record<string, true> = {
+    ...(catchesUp(channel, programme, now) ? { catchup: true as const } : {}),
+    ...(programme.placeholder ? { placeholder: true as const } : {}),
+    ...(programme.finale ? { finale: true as const } : {}),
+  };
+  return Object.keys(extras).length ? extras : null;
+}
+
 function programmeDto(channel: ChannelInfo, programme: Programme, serverId: string, now: number): any {
   const id = programmeIdFor(channel, programme);
   if (programme.thumbnail) rememberImages(serverId, id, { primary: programme.thumbnail });
   const number = numberOf(channel);
+  const extras = programmeExtras(channel, programme, now);
   return {
     Name: programme.name || channel.name,
     ServerId: serverId,
@@ -728,7 +809,10 @@ function programmeDto(channel: ChannelInfo, programme: Programme, serverId: stri
     ImageBlurHashes: {},
     LocationType: 'Remote',
     UserData: { ...EMPTY_USER_DATA, Key: id, ItemId: id },
-    ...(catchesUp(channel, programme, now) ? { aiostreams: { catchup: true } } : {}),
+    ...(programme.episodeTitle ? { EpisodeTitle: programme.episodeTitle } : {}),
+    ...(programme.genres?.length ? { Genres: programme.genres, ...kindsOf(programme.genres) } : {}),
+    ...(programme.live !== undefined ? { IsLive: programme.live, IsNew: programme.isNew === true, IsPremiere: programme.premiere === true } : {}),
+    ...(extras ? { aiostreams: extras } : {}),
   };
 }
 
@@ -766,19 +850,30 @@ function channelDto(id: string, channel: ChannelInfo | undefined, serverId: stri
 
 /** The Live TV view, said to have groups and a guide only where the addon's catalogs do. */
 function viewDto(source: LiveSource, serverId: string): any {
+  return viewWith(serverId, {
+    groups: source.catalogs.some((catalog) => catalog.groups.length > 0),
+    guide: source.catalogs.some((catalog) => catalog.guide),
+  });
+}
+
+function viewWith(serverId: string, has: { groups: boolean; guide: boolean }): any {
   return {
     ...collectionFolder(LIVE_VIEW_ID, serverId, 'Live TV', 'livetv', null),
     Type: 'UserView',
-    aiostreams: {
-      groups: source.catalogs.some((catalog) => catalog.groups.length > 0),
-      guide: source.catalogs.some((catalog) => catalog.guide),
-    },
+    aiostreams: has,
   };
 }
 
 /** The Live TV view for the user's libraries, once its addon has answered; null without live catalogs. */
 export async function liveTvView(config: any, serverId: string): Promise<any | null> {
   if (!liveTvEnabled()) return null;
+  const direct = dispatcharrOf(config);
+  if (direct) {
+    // Set up on the server, so the view is there at once while the channels are read for later.
+    direct.lineup().catch(() => undefined);
+    const known = direct.known();
+    return viewWith(serverId, { groups: known ? known.groups.length > 0 : true, guide: true });
+  }
   const base = normaliseStreamBase(config?.jellyfinStreamUrl || '');
   if (!base) return null;
   // The request that starts reading the manifest waits a moment for it, never the addon's full timeout;
@@ -848,6 +943,10 @@ function asksForChannels(req: any): boolean {
 
 function asksForFavourites(req: any): boolean {
   return boolParam(req, 'IsFavorite') === true || listParam(req, 'Filters').some((f) => f.toLowerCase() === 'isfavorite');
+}
+
+function sourceName(source: LiveSource | null): string {
+  return source?.direct ? 'Dispatcharr' : 'The stream addon';
 }
 
 interface Scope {
@@ -952,7 +1051,7 @@ async function answerChannels(req: any, res: any, scope: Scope, group: string | 
     res.json(itemList(page.items, page.total, start));
   } catch (error: any) {
     logger.warn(`Channels could not be listed: ${error?.message || error}`);
-    res.status(503).json({ Message: 'The stream addon could not be reached' });
+    res.status(503).json({ Message: `${sourceName(scope.source)} could not be reached` });
   }
 }
 
@@ -1000,7 +1099,7 @@ async function answerProgrammes(req: any, res: any, recommended: boolean): Promi
     }
   } catch (error: any) {
     logger.warn(`Channels for the guide could not be read: ${error?.message || error}`);
-    res.status(503).json({ Message: 'The stream addon could not be reached' });
+    res.status(503).json({ Message: `${sourceName(source)} could not be reached` });
     return;
   }
 
@@ -1008,7 +1107,7 @@ async function answerProgrammes(req: any, res: any, recommended: boolean): Promi
   const to = airing ? now : maxStart ?? maxEnd ?? (recommended ? now + 6 * 60 * 60 * 1000 : now + DAY_MS);
   const { byChannel, failed } = await guideFor(source, list, from, to);
   if (failed) {
-    res.status(503).json({ Message: 'The stream addon did not answer for the guide' });
+    res.status(503).json({ Message: `${sourceName(source)} did not answer for the guide` });
     return;
   }
   const order = new Map(list.map((channel, i) => [channel.id, i]));
@@ -1109,7 +1208,12 @@ async function liveMediaSources(req: any, scope: Scope, descriptor: Channel | Pr
   const client = streamClient(owner, clientInfo(req), req.get?.('user-agent'));
   const key = `live|${owner}|${descriptor.t}|${descriptor.i}|${client?.tag ?? ''}`;
   const streams = recallStreams(key) ?? await coalesce(key, async () => {
-    const fetched = await fetchStreams(source.base, descriptor.t, descriptor.i, client);
+    const fetched = source.direct
+      ? { streams: await source.direct.streams(descriptor.t, descriptor.i).catch((error: any) => {
+          logger.warn(`Dispatcharr's sources could not be read: ${error?.message || error}`);
+          return [];
+        }) }
+      : await fetchStreams(source.base, descriptor.t, descriptor.i, client);
     if (fetched.streams.length) rememberStreams(key, fetched.streams);
     return fetched.streams;
   });
@@ -1148,7 +1252,7 @@ export function registerLiveTv(router: any, deps: LiveTvDeps): void {
     const scope = await scopeOf(req);
     if (!scope?.source) return next();
     res.json({
-      Services: [{ Name: 'Stream addon', HomePageUrl: '', Status: 'Ok', StatusMessage: '', Version: '', HasUpdateAvailable: false, IsVisible: true, Tuners: [] }],
+      Services: [{ Name: scope.source.direct ? 'Dispatcharr' : 'Stream addon', HomePageUrl: '', Status: 'Ok', StatusMessage: '', Version: '', HasUpdateAvailable: false, IsVisible: true, Tuners: [] }],
       IsEnabled: true,
       // Every profile may use it; some clients look for their user here before showing Live TV.
       EnabledUsers: listProfiles(scope.config, scope.userUUID).map((profile) => profile.userId),
@@ -1272,6 +1376,8 @@ export function registerLiveTv(router: any, deps: LiveTvDeps): void {
     // Named by the id a version was listed with, or by the addon's own one it carries.
     const picked = requested ? all.filter((s) => normaliseJellyfinId(s.Id) === requested || s.aiostreams?.id === requested) : [];
     const sources = picked.length ? picked : all;
+    // Dispatcharr, with switching on: a stream chosen to play switches its channel to it.
+    if (picked.length && scope?.source?.direct) await scope.source.direct.chosen(descriptor.k === 'channel' ? descriptor.i : descriptor.c, picked[0].aiostreams?.bingeGroup);
     if (!sources.length) {
       res.json({ MediaSources: [], PlaySessionId: randomUUID(), ErrorCode: 'NoCompatibleStream' });
       return;
