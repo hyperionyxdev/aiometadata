@@ -84,10 +84,15 @@ import { liveAllowed, liveFavourite, liveGroups, liveItem, livePlayback, liveSea
 import { livePrimaryKind, liveTvViewId } from './livetv/items';
 import { liveReportGuard } from './livetv/reports';
 import { asDefault, createLivePins, liveSourceIds, pickLive, pinScope, sourcesNamed } from './livetv/sources';
-import { GONE, placementFor } from './livetv/lineup';
+import { GONE, guideChannels, placementFor } from './livetv/lineup';
+import { programmesFor } from './livetv/guide';
+import { unnamedChannels } from './livetv/limits';
 import { dispatcharrFor, dispatcharrLive, type DispatcharrLive } from './dispatcharr';
 import { DIRECT_BASE, withDispatcharr } from './dispatcharr/addon';
 import { liveUrlFor } from './dispatcharr/hls';
+import { currentRecorder, mayRecord, registerRecordings, type ChannelRef, type ProgrammeInfo } from './recordings';
+import { recordingSettings } from './recordings/settings';
+import type { LocalDeps } from './recordings/local';
 import { profileUserId } from './profiles';
 import { addonFetch, addonFetchMaxBytes, readCappedResponse } from '../../utils/outboundGuard';
 import { answerPlaylistListing, hasPlaylists, playlistAsItem, playlistConcurrency, playlistImages, playlistsFolder, registerPlaylistRoutes, type PlaylistRouteDeps } from './playlists';
@@ -443,10 +448,55 @@ async function moveOldFavourites(userUUID: string, key: string): Promise<void> {
 
 /** Dispatcharr Live TV for the profile a configuration is scoped to, where the server reads it and lets this profile use it. */
 function dispatcharrOf(config: any): DispatcharrLive | null {
+  return dispatcharrFor(whoOf(config));
+}
+
+/** A Live TV channel as recordings name it, from its id's parts and its item's name and number. */
+function channelRefOf(decoded: { t: string; i: string }, name: unknown, number: unknown): ChannelRef {
+  return {
+    type: decoded.t,
+    id: decoded.i,
+    name: typeof name === 'string' && name.trim() ? name.trim() : decoded.i,
+    ...(number !== undefined && number !== null && number !== '' ? { number: String(number) } : {}),
+  };
+}
+
+/** What a guide programme item says of it, as recordings keep it. */
+function programmeInfoOf(item: any): ProgrammeInfo {
+  const whole = (value: unknown) => (Number.isInteger(value) ? (value as number) : undefined);
+  const season = whole(item.ParentIndexNumber);
+  const episode = whole(item.IndexNumber);
+  return {
+    title: String(item.Name ?? '').trim() || 'Recording',
+    start: Date.parse(item.StartDate),
+    end: Date.parse(item.EndDate),
+    ...(item.EpisodeTitle ? { episodeTitle: String(item.EpisodeTitle) } : {}),
+    ...(item.Overview ? { overview: String(item.Overview) } : {}),
+    ...(season !== undefined ? { season } : {}),
+    ...(episode !== undefined ? { episode } : {}),
+    ...(typeof item.IsNew === 'boolean' ? { isNew: item.IsNew } : {}),
+    ...(typeof item.IsLive === 'boolean' ? { live: item.IsLive } : {}),
+    ...(Array.isArray(item.Genres) && item.Genres.length ? { genres: item.Genres.map(String) } : {}),
+  };
+}
+
+/** The configuration and profile a scoped configuration is, as the allow lists name them. */
+function whoOf(config: any): { userUUID?: string; profiles: Array<{ id: string | null; userId: string }> } {
   // The configuration's UUID is the one in the signed-in request's path, set by loadConfig.
   const userUUID = typeof config?.userUUID === 'string' ? config.userUUID : undefined;
   const profileId = typeof config?.jellyfinProfileId === 'string' && config.jellyfinProfileId ? config.jellyfinProfileId : null;
-  return dispatcharrFor({ userUUID, profiles: userUUID ? [{ id: profileId, userId: profileUserId(userUUID, profileId) }] : [] });
+  return { userUUID, profiles: userUUID ? [{ id: profileId, userId: profileUserId(userUUID, profileId) }] : [] };
+}
+
+/**
+ * Whether this configuration's profile may record Live TV: recording on, with Dispatcharr's DVR
+ * only where its Live TV comes from Dispatcharr, and the profile one allowed to.
+ */
+function recordsFor(config: any): boolean {
+  const settings = recordingSettings(dispatcharrLive() !== null);
+  if (settings.mode === 'off') return false;
+  if (settings.mode === 'dispatcharr' && !dispatcharrOf(config)) return false;
+  return mayRecord(settings, whoOf(config));
 }
 
 const liveTvGate: GateDeps = {
@@ -484,7 +534,9 @@ async function userFor(
   }
   if (liveTv && scoped) {
     await liveTvRecall(liveTvGate, scoped);
-    user.Policy = { ...user.Policy, EnableLiveTvAccess: liveTvFor(liveTvGate, scoped) !== null };
+    const live = liveTvFor(liveTvGate, scoped) !== null;
+    // Recording offered where Live TV is and this profile may record.
+    user.Policy = { ...user.Policy, EnableLiveTvAccess: live, EnableLiveTvManagement: live && recordsFor({ ...scoped, userUUID: owner!.userUUID }) };
   }
   return user;
 }
@@ -908,6 +960,79 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
     if (req.jellyfin?.authenticated) rememberTokenDevice(req.jellyfin.userUUID, extractToken(req), clientInfo(req));
     next();
   });
+
+  // Recording Live TV (recordings/): ahead of the item and stream routes, which a recording's id
+  // never reaches. Its lookups are the Live TV code's own, made below.
+  registerRecordings(router, {
+    recorderFor: async (req: any) => {
+      const config = await loadConfig(req);
+      if (!config || !(await liveAllowed(req, liveTv))) return null;
+      if (!recordsFor(config)) return null;
+      return currentRecorder(dispatcharrLive(), () => localRecordingDeps)?.recorder ?? null;
+    },
+    programmeOf: async (req: any, programId: string) => {
+      const decoded: any = await decodeLiveId(programId);
+      if (decoded?.k !== 'program') return null;
+      const answer = await liveItem(req, liveTv, decoded);
+      const item = answer?.status === 200 ? answer.body : null;
+      if (!item?.StartDate || !item?.EndDate) return null;
+      return { channel: channelRefOf(decoded, item.ChannelName, item.ChannelNumber), programme: programmeInfoOf(item) };
+    },
+    channelOf: async (req: any, channelId: string) => {
+      const decoded: any = await decodeLiveId(channelId);
+      if (decoded?.k !== 'channel') return null;
+      const answer = await liveItem(req, liveTv, decoded);
+      return answer?.status === 200 ? channelRefOf(decoded, answer.body?.Name, answer.body?.ChannelNumber) : null;
+    },
+    channelItemId: (channel) => encodeJellyfinId({ k: 'channel', t: channel.type, i: channel.id }),
+    programmeItemId: (channel, start) => encodeProgramId({ t: channel.type, i: channel.id, at: Math.floor(start / 1000) }),
+    serverIdFor,
+    itemList,
+    emptyUserData: EMPTY_USER_DATA,
+  });
+
+  // A request made for a recording that starts on its own: as the configuration and profile that set it.
+  const requestAs = (owner: string | undefined): any => {
+    const [userUUID, profileId] = String(owner ?? '').split('/');
+    const jellyfin = { userUUID, token: undefined, authenticated: true, config: null, profileId: profileId || null };
+    return { params: { userUUID }, jellyfin, headers: {}, query: {}, body: {}, get: () => undefined, path: '' };
+  };
+  const localRecordingDeps: LocalDeps = {
+    streamUrl: async (channel: ChannelRef, owner?: string) => {
+      if (!owner) return null;
+      const sources = await resolveSourcesFor(requestAs(owner), channel.type, channel.id, null, { live: true, refresh: true });
+      const first = sources.find((source: any) => typeof source?.Path === 'string' && /^https?:/i.test(source.Path));
+      return first?.Path ?? null;
+    },
+    channels: async (owner?: string) => {
+      if (!owner) return [];
+      const req = requestAs(owner);
+      const live = await liveAllowed(req, liveTv);
+      if (!live) return [];
+      const listed = await guideChannels(liveTvGate.addon, live.base, live.catalogs, unnamedChannels());
+      return listed.map((c: any) => ({ type: c.meta.type, id: c.meta.id, name: c.meta.name ?? c.meta.id, ...(c.number ? { number: String(c.number) } : {}) }));
+    },
+    programmes: async (channel: ChannelRef, from: number, to: number, owner?: string) => {
+      if (!owner) return [];
+      const live = await liveAllowed(requestAs(owner), liveTv);
+      if (!live) return [];
+      const found = await programmesFor(liveTvGate.addon, live.base, live.reach, [{ type: channel.type, id: channel.id }], from, to);
+      return (found.get(`${channel.type}|${channel.id}`) ?? []).filter((p: any) => !p.placeholder).map((p: any) => ({
+        title: p.title,
+        start: p.start,
+        end: p.end,
+        ...(p.episodeTitle ? { episodeTitle: p.episodeTitle } : {}),
+        ...(p.overview ? { overview: p.overview } : {}),
+        ...(p.season !== undefined ? { season: p.season } : {}),
+        ...(p.episode !== undefined ? { episode: p.episode } : {}),
+        ...(p.isNew !== undefined ? { isNew: p.isNew } : {}),
+        ...(p.live !== undefined ? { live: p.live } : {}),
+        ...(p.genres ? { genres: p.genres } : {}),
+      }));
+    },
+    now: Date.now,
+    userAgent: () => streamUserAgent(),
+  };
 
   router.get('/System/Info', (req: any, res: any) => {
     res.json({ ...systemInfo(serverIdFor(req.params.userUUID), baseFor(req)), aiostreams: extensionInfo(localAddress(req)) });

@@ -142,6 +142,39 @@ export class DispatcharrClient {
     return answer;
   }
 
+  /**
+   * A signed-in request whose answer is passed on as it arrives rather than read whole: a
+   * recording's file, with the range a player asked for. Redirects are not followed; the caller
+   * reads them. The body is the response itself; the caller must read or destroy it.
+   */
+  async open(path: string, headers: Record<string, string> = {}): Promise<http.IncomingMessage> {
+    const attempt = async () => {
+      const auth = await this.credential();
+      const url = new URL(this.settings.url + path);
+      const sent: Record<string, string> = { 'user-agent': 'AIOMetadata', ...headers };
+      Object.assign(sent, this.settings.apiKey ? { 'x-api-key': auth } : { authorization: `Bearer ${auth}` });
+      const host = hostHeaderFor(url, this.settings.hostHeader);
+      if (host) sent.host = host;
+      const label = url.pathname;
+      return new Promise<http.IncomingMessage>((resolve, reject) => {
+        const client = url.protocol === 'https:' ? https : http;
+        const req = client.request(url, { method: 'GET', headers: sent }, resolve);
+        // Only until the answer starts: a long file then takes as long as it takes.
+        req.setTimeout(this.settings.timeoutMs, () => req.destroy(new DispatcharrError(`Dispatcharr ${label} gave no answer within ${Math.round(this.settings.timeoutMs / 1000)}s`)));
+        req.on('response', () => req.setTimeout(0));
+        req.on('error', (error: any) => reject(error instanceof DispatcharrError ? error : new DispatcharrError(`Dispatcharr ${label} could not be reached (${error?.code || 'error'})`)));
+        req.end();
+      });
+    };
+    const answer = await attempt();
+    if (answer.statusCode === 401 && !this.settings.apiKey) {
+      answer.resume();
+      this.access = null;
+      return attempt();
+    }
+    return answer;
+  }
+
   async get(path: string): Promise<any> {
     const answer = await this.request(path);
     const label = path.split('?')[0];

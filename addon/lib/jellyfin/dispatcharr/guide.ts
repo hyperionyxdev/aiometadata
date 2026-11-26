@@ -157,7 +157,7 @@ export class Guide {
   private days = new Map<number, Day>();
   private loading = new Map<number, Promise<Day | null>>();
   private failedAt = new Map<number, number>();
-  private epgIds: { at: number; byId: Map<number, string> } | null = null;
+  private epgIds: { at: number; byId: Map<number, string>; sources: Map<number, number> } | null = null;
   private epgLoading: Promise<void> | null = null;
 
   constructor(private readonly client: DispatcharrClient, private readonly cacheMs: number) {}
@@ -171,13 +171,34 @@ export class Guide {
     if (this.epgIds && age < EPG_IDS_MS && !(missing && age > EPG_IDS_RECHECK_MS)) return this.epgIds.byId;
     this.epgLoading ??= this.client.list('/api/epg/epgdata/')
       .then((rows) => {
-        this.epgIds = { at: Date.now(), byId: new Map(rows.filter((r) => finite(r?.id) !== null && typeof r.tvg_id === 'string').map((r) => [Number(r.id), r.tvg_id])) };
+        const kept = rows.filter((r) => finite(r?.id) !== null && typeof r.tvg_id === 'string');
+        this.epgIds = {
+          at: Date.now(),
+          byId: new Map(kept.map((r) => [Number(r.id), r.tvg_id])),
+          sources: new Map(kept.filter((r) => finite(r.epg_source) !== null).map((r) => [Number(r.id), Number(r.epg_source)])),
+        };
       })
       .catch((error: any) => logger.warn(`Dispatcharr's guide ids could not be read: ${error?.message || error}`))
       .finally(() => (this.epgLoading = null));
     // While the new list loads, the held one serves, unless it is the one missing a channel's guide.
     if (this.epgIds && !missing) return this.epgIds.byId;
     await this.epgLoading;
+    return this.epgIds?.byId ?? new Map();
+  }
+
+  /**
+   * The guide a channel's programmes come from: its tvg id and its guide source, as Dispatcharr's
+   * own Record buttons send them. Null for a channel without a guide of its own.
+   */
+  async guideOf(channel: DispatcharrChannel, lineup: Lineup | null): Promise<{ tvgId: string; sourceId: number | null } | null> {
+    if (channel.epgDataId === null) return null;
+    const byId = await this.guideIds(lineup);
+    const tvgId = byId.get(channel.epgDataId);
+    return tvgId ? { tvgId, sourceId: this.epgIds?.sources.get(channel.epgDataId) ?? null } : null;
+  }
+
+  /** The tvg ids read last, by guide (EPG data) id, without reading them. */
+  knownTvgIds(): Map<number, string> {
     return this.epgIds?.byId ?? new Map();
   }
 
