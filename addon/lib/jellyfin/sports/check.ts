@@ -120,6 +120,8 @@ export async function sportsCheck(source: CheckSource, board: Scoreboard, now: n
   // A share of the guide at a time, matched and let go, until all is read or the time is up.
   for (let at = 0; at < channels.length; at += chunk) {
     if (at > 0 && clock() - began > budgetMs) break;
+    // Between shares, the server answers whatever else is waiting (its health check included).
+    await new Promise<void>((resolve) => setImmediate(resolve));
     const part = channels.slice(at, at + chunk);
     const guide = await source.programmes(part, from - 2 * HOUR, to + 4 * HOUR);
     readCount += part.length;

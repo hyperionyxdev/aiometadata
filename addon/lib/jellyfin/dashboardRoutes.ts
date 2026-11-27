@@ -20,25 +20,15 @@ export function registerJellyfinDashboardRoutes(addon: any, deps: any): void {
   });
 
   // The sports check for the administrator, over every configuration with Live TV: no id to look up.
-  // Ahead of the routes that take a configuration's id in this place.
+  // Ahead of the routes that take a configuration's id in this place. One at a time: a second ask
+  // while one runs waits for it rather than reading the guide again.
+  let sportsChecking: Promise<any[]> | null = null;
   addon.get("/api/dashboard/jellyfin/sports-check", requireDashboardAdmin, async (req, res) => {
     try {
-      // Configurations with the same Live TV share one guide: checked once, naming them all.
-      const jellyfin = require('./index');
-      const byGuide = new Map<string, { config: any; configurations: string[] }>();
-      for (const userUUID of ((await database.getAllUserUUIDs().catch(() => [])) as string[]).slice(0, 50)) {
-        const config = await database.getUserConfig(userUUID).catch(() => null);
-        const guide = config ? await jellyfin.sportsGuideOf(config) : null;
-        if (!guide) continue;
-        const held = byGuide.get(guide);
-        if (held) held.configurations.push(userUUID);
-        else byGuide.set(guide, { config, configurations: [userUUID] });
-      }
-      const checks: any[] = [];
-      for (const { config, configurations } of byGuide.values()) {
-        const check = await jellyfin.checkSports(config);
-        if (check) checks.push({ configurations, ...check });
-      }
+      sportsChecking ??= runSportsCheck().finally(() => {
+        sportsChecking = null;
+      });
+      const checks = await sportsChecking;
       if (!checks.length) {
         res.status(404).json({ error: 'No configuration has Live TV' });
         return;
@@ -49,6 +39,26 @@ export function registerJellyfinDashboardRoutes(addon: any, deps: any): void {
       res.status(500).json({ error: 'Failed to check the guide against the day\'s games' });
     }
   });
+
+  async function runSportsCheck(): Promise<any[]> {
+    // Configurations with the same Live TV share one guide: checked once, naming them all.
+    const jellyfin = require('./index');
+    const byGuide = new Map<string, { config: any; configurations: string[] }>();
+    for (const userUUID of ((await database.getAllUserUUIDs().catch(() => [])) as string[]).slice(0, 50)) {
+      const config = await database.getUserConfig(userUUID).catch(() => null);
+      const guide = config ? await jellyfin.sportsGuideOf(config) : null;
+      if (!guide) continue;
+      const held = byGuide.get(guide);
+      if (held) held.configurations.push(userUUID);
+      else byGuide.set(guide, { config, configurations: [userUUID] });
+    }
+    const checks: any[] = [];
+    for (const { config, configurations } of byGuide.values()) {
+      const check = await jellyfin.checkSports(config);
+      if (check) checks.push({ configurations, ...check });
+    }
+    return checks;
+  }
 
   addon.get("/api/dashboard/jellyfin/search", requireDashboardAdmin, async (req, res) => {
     try {

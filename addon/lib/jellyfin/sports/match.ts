@@ -134,20 +134,27 @@ interface Name {
 export class TeamNames {
   /** By a name's first word. */
   private readonly byFirst = new Map<string, Name[]>();
+  /** The games each team, or a card's own name (`title:<game>`), is in. */
+  private readonly gamesOf = new Map<string, Game[]>();
 
   constructor(games: Game[]) {
     const all = new Map<string, Name>();
+    const add = (words: string[], key: string, game: Game) => {
+      if (!words.length) return;
+      const joined = words.join(' ');
+      const name = all.get(joined) ?? { words, teams: new Set<string>() };
+      name.teams.add(key);
+      all.set(joined, name);
+      const list = this.gamesOf.get(key) ?? [];
+      if (!list.includes(game)) list.push(game);
+      this.gamesOf.set(key, list);
+    };
     for (const game of games) {
       // A card's every fighter, so a guide naming any of its fights finds it.
       const sides = [game.home, game.away, ...(game.bouts ?? []).flatMap((bout) => [bout.a, bout.b])];
-      for (const team of sides) {
-        for (const words of namesOf(team)) {
-          const joined = words.join(' ');
-          const name = all.get(joined) ?? { words, teams: new Set<string>() };
-          name.teams.add(teamKey(game, team));
-          all.set(joined, name);
-        }
-      }
+      for (const team of sides) for (const words of namesOf(team)) add(words, teamKey(game, team), game);
+      // A card by its own name too ("UFC 334", "UFC Fight Night").
+      if (game.kind === 'card' && game.title) add(wordsOf(game.title), `title:${game.id}`, game);
     }
     for (const name of all.values()) {
       const list = this.byFirst.get(name.words[0]) ?? [];
@@ -156,7 +163,7 @@ export class TeamNames {
     }
   }
 
-  /** The teams a text names: the longest name wherever names overlap. */
+  /** The teams a text names (and cards it names by their own name): the longest name wherever names overlap. */
   teamsIn(text: string): Set<string> {
     const words = wordsOf(text);
     const found: Array<{ at: number; length: number; teams: Set<string> }> = [];
@@ -165,6 +172,7 @@ export class TeamNames {
         if (name.words.every((w, n) => words[at + n] === w)) found.push({ at, length: name.words.length, teams: name.teams });
       }
     });
+    if (!found.length) return new Set();
     found.sort((a, b) => b.length - a.length || a.at - b.at);
     const taken = new Array<boolean>(words.length).fill(false);
     const teams = new Set<string>();
@@ -175,20 +183,30 @@ export class TeamNames {
     }
     return teams;
   }
+
+  /** The games any of these teams or cards is in. */
+  gamesFor(keys: Set<string>): Game[] {
+    const games = new Set<Game>();
+    for (const key of keys) for (const game of this.gamesOf.get(key) ?? []) games.add(game);
+    return [...games];
+  }
 }
 
 /**
  * The games a text names both teams of; a fight card also by its own name ("UFC 334 Prelims",
- * "UFC Fight Night", "PFL Lyon"), as a guide often names its prelims.
+ * "UFC Fight Night", "PFL Lyon"), as a guide often names its prelims, or by both fighters of any of
+ * its fights. Only the games of the teams named are looked at, so a guide of thousands of programmes
+ * against a thousand games stays quick. `names` is made from `games`.
  */
 export function gamesNamed(text: string, games: Game[], names: TeamNames): Game[] {
+  if (!games.length) return [];
   const teams = names.teamsIn(text);
-  const both = (game: Game) => teams.has(teamKey(game, game.home)) && teams.has(teamKey(game, game.away));
-  if (!games.some((game) => game.kind === 'card')) return teams.size < 2 ? [] : games.filter(both);
-  const words = ` ${wordsOf(text).join(' ')} `;
-  const titled = (game: Game) => Boolean(game.title) && words.includes(` ${wordsOf(game.title!).join(' ')} `);
-  const anyBout = (game: Game) => (game.bouts ?? []).some((bout) => teams.has(teamKey(game, bout.a)) && teams.has(teamKey(game, bout.b)));
-  return games.filter((game) => both(game) || (game.kind === 'card' && (titled(game) || anyBout(game))));
+  if (!teams.size) return [];
+  return names.gamesFor(teams).filter((game) => {
+    if (teams.has(teamKey(game, game.home)) && teams.has(teamKey(game, game.away))) return true;
+    if (game.kind !== 'card') return false;
+    return teams.has(`title:${game.id}`) || (game.bouts ?? []).some((bout) => teams.has(teamKey(game, bout.a)) && teams.has(teamKey(game, bout.b)));
+  });
 }
 
 /**

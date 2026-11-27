@@ -30,6 +30,8 @@ const textOf = (programme: Programme): string => [programme.title, programme.epi
 export class GameFinder {
   private readonly names: TeamNames;
   private readonly byChannel = new Map<string, Game | null>();
+  /** The games a programme's name names, by its name: a guide repeats the same names many times. */
+  private readonly byText = new Map<string, Game[]>();
 
   constructor(readonly games: Game[], private readonly now: number) {
     this.names = new TeamNames(games);
@@ -53,7 +55,14 @@ export class GameFinder {
 
   /** The games a programme's own name names and its times fit. */
   programmeGames(programme: Programme): Game[] {
-    return gamesNamed(textOf(programme), this.games, this.names).filter((game) => showsGame(programme, game));
+    const text = textOf(programme);
+    let named = this.byText.get(text);
+    if (!named) {
+      named = gamesNamed(text, this.games, this.names);
+      if (this.byText.size >= 50000) this.byText.clear();
+      this.byText.set(text, named);
+    }
+    return named.length ? named.filter((game) => showsGame(programme, game)) : named;
   }
 
   /** What a programme shows of a game, if anything. */
