@@ -1,10 +1,12 @@
 name: Follow upstream releases
 
-# Keeps the live-tv-upstream branch (upstream's own Live TV, with Live TV read straight from
-# Dispatcharr where the server is set up for it) on the newest AIOMetadata release. Once a day it
-# merges a release that isn't in the branch yet and builds its image under the live-tv-upstream
-# tag, which servers watching that tag then pull. A release that doesn't merge cleanly builds
-# nothing: it opens an issue to merge it by hand.
+# Keeps the server branch (the code the owner's server runs: upstream's own Live TV, read straight
+# from Dispatcharr where the server is set up for it, with recording) on the newest AIOMetadata
+# release. Once a day it merges a release that isn't in the branch yet and builds its image under
+# the server tag, which the server then pulls. A release that doesn't merge cleanly builds nothing:
+# it opens an issue to merge it by hand, and the server keeps the last image.
+#
+# GitHub runs a schedule only from the repository's default branch, so server is the default.
 on:
   schedule:
     - cron: '17 11 * * *'
@@ -27,13 +29,13 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       UPSTREAM: cedya77/aiometadata
-      BRANCH: live-tv-upstream
-      TAG_NAME: live-tv-upstream
+      BRANCH: server
+      TAG_NAME: server
     steps:
-      - name: Check out live-tv-upstream
+      - name: Check out server
         uses: actions/checkout@v4
         with:
-          ref: live-tv-upstream
+          ref: server
           fetch-depth: 0
 
       - name: Find the newest release
@@ -47,7 +49,7 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "Newest upstream release: $tag"
 
-      - name: Merge it into live-tv-upstream
+      - name: Merge it into server
         id: merge
         env:
           TAG: ${{ steps.release.outputs.tag }}
@@ -72,7 +74,7 @@ jobs:
             echo "$TAG doesn't merge cleanly into $BRANCH." >&2
           fi
 
-      - name: Build the live-tv-upstream image
+      - name: Build the server image
         if: steps.merge.outputs.result == 'merged'
         run: gh workflow run docker-publish-preview.yml -R "$GITHUB_REPOSITORY" --ref "$BRANCH" -f tag="$TAG_NAME"
 

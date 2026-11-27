@@ -5,7 +5,7 @@ With Dispatcharr behind it that is four hops (client → this server → the str
 Dispatcharr addon → Dispatcharr), each with its own cache, and a channel group with a `/` in its
 name can't always be asked for through the stream addon.
 
-On `live-tv-upstream` the server can read Dispatcharr itself: client → this server → Dispatcharr.
+On the `server` branch the server can read Dispatcharr itself: client → this server → Dispatcharr.
 It is set up with environment variables only. Without `JELLYFIN_DISPATCHARR_URL` (and a login),
 nothing changes: Live TV comes from the stream addon, as upstream has it.
 
@@ -15,8 +15,10 @@ ids and a guide by day), and whose catalog paths are answered from Dispatcharr's
 Upstream's Live TV code then lists, pages, searches and plays it as it would any addon's; a
 channel's or a programme's sources (`dispatcharr:…` ids) come from Dispatcharr too.
 
-The image is built under the tag `live-tv-upstream`. The daily "Follow upstream releases"
-workflow merges each new upstream release into this branch and builds it.
+The image is built under the tag `server`. The daily "Follow upstream releases" workflow (which
+runs from `server`, the fork's default branch) merges each new upstream release into this branch
+and builds it; a server pulling the `server` tag once a day stays up to date. A release that
+doesn't merge cleanly builds nothing and opens an issue instead.
 
 ## What it reads
 
@@ -84,13 +86,13 @@ list your own configuration (or profiles), or they will get your channels too.
 1. In Dispatcharr, make an API key for a Standard or Admin user (Admin if you want Auto to name the
    running stream, or switching), and note the XC login you use today.
 2. Put both containers on one Docker network, or use an address the server can reach.
-3. Use the `live-tv-upstream` image and add the settings. Keep the secrets in an `.env` file next
+3. Use the `server` image and add the settings. Keep the secrets in an `.env` file next
    to the compose file rather than in the compose file itself:
 
    ```yaml
    services:
      aiometadata:
-       image: ghcr.io/<owner>/aiometadata:live-tv-upstream
+       image: ghcr.io/<owner>/aiometadata:server
        env_file: .env
        environment:
          JELLYFIN_DISPATCHARR_URL: http://dispatcharr:9191
