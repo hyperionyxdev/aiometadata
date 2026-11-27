@@ -12,6 +12,7 @@ import type { LiveTvDeps } from '../livetv/routes';
 import { scoreboard as sharedBoard, type Scoreboard } from './espn';
 import { channelsByGame, GameFinder, gameInfo, ranked } from './guide';
 import { leagueByKey } from './leagues';
+import { programmesInParts } from './live';
 import { sportsLeagues, sportsOn } from './settings';
 
 const HOUR = 60 * 60 * 1000;
@@ -26,7 +27,7 @@ const LIST_BEHIND_MS = 6 * HOUR;
 const LIST_AHEAD_MS = 30 * HOUR;
 const MAX_LIST_SPAN_MS = 4 * 24 * HOUR;
 const LIST_KEEP_MS = 20 * 1000;
-const ALL_CHANNELS = 5000;
+const ALL_CHANNELS = 100000;
 const LOGO_HOST = 'a.espncdn.com';
 const MAX_LOGO_BYTES = 2 * 1024 * 1024;
 const LOGO_TIMEOUT_MS = 8000;
@@ -103,7 +104,7 @@ export async function gamesList(deps: LiveTvDeps, req: any, config: any, board: 
     listChannels(deps.addon, live.base, live.catalogs, { startIndex: 0, limit: ALL_CHANNELS }),
   ]);
   const channels = listed.channels;
-  const guide = await programmesFor(deps.addon, live.base, live.reach, channels.map((c) => c.meta), from - 2 * HOUR, to + 4 * HOUR);
+  const guide = await programmesInParts((metas) => programmesFor(deps.addon, live.base, live.reach, metas, from - 2 * HOUR, to + 4 * HOUR), channels);
   const byGame = channelsByGame(new GameFinder(read.games, now), channels, guide);
   const answer = {
     games: read.games.map((game) => ({

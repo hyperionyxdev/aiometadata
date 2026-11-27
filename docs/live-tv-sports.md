@@ -25,22 +25,26 @@ league that can't be read is reported as failed.
 
 ## Leagues
 
-`addon/lib/jellyfin/sports/leagues.ts`, by key: `nba`, `wnba`, `ncaam` and `ncaaw` (men's and women's
-college basketball), `nfl`, `ncaaf` (college football), `nhl`, `mlb`, `mls`, `nwsl`, `epl` (Premier
+`addon/lib/jellyfin/sports/leagues.ts`, by key: `nba`, `wnba`, `gleague` (NBA G League), `ncaam` and
+`ncaaw` (men's and women's college basketball, all of Division I rather than the scoreboard's few
+featured games), `nfl`, `ncaaf` (college football), `nhl`, `mlb`, `mls`, `nwsl`, `epl` (Premier
 League), `efl` (EFL Championship), `facup`, `laliga`, `bundesliga`, `seriea`, `ligue1`, `ligamx`,
 `ligaexp` (Liga de Expansión MX), `ligamxf` (Liga MX Femenil), `copamx`, `concacaf` (Concacaf Champions
-Cup), `leaguescup`, `ucl` (Champions League) and `uel` (Europa League).
+Cup), `leaguescup`, `concacafw` (Concacaf W Championship), `wgoldcup` (Concacaf W Gold Cup), `ucl`
+(Champions League) and `uel` (Europa League).
 
 ## How games are matched to channels
 
 A team is known by every name ESPN gives it (full, short, nickname and place: "Philadelphia 76ers",
-"76ers", "Philadelphia"), compared without accents, full stops or apostrophes, and with "St.",
-"Saint" and "State" written one way. A programme or a channel names a game when it names both of its
+"76ers", "Philadelphia"), compared without accents, full stops or apostrophes, with "St.",
+"Saint" and "State" written one way, and Spanish guides' names for countries read as ESPN's
+("Estados Unidos", "Inglaterra", "Corea del Sur"). A programme or a channel names a game when it names both of its
 teams. Where one name sits inside a longer one ("Michigan" in "Michigan State"), the longer one wins,
 and every team playing that day is known, so a name isn't taken for a team it's only part of.
 
 - **By a programme:** its name and episode name name the game, and it begins up to 75 minutes before
-  the game or 45 after, running at least half an hour into it. A preview that ends as the game
+  the game or 90 after (joined late, or a guide an hour out, as some for Mexico's channels are),
+  running at least half an hour into it. A preview that ends as the game
   starts, or a replay later on, isn't the game.
 - **By a channel:** a channel made for a game ("4K | NBA | 76ers v Pacers | 4:30 PM PST") names it in
   its own name. Where its name fits several games (a series), it's the one under way, else the next.
@@ -78,8 +82,8 @@ games and how many were found on a channel, what matched none, and every game wi
 https://<this server>/api/dashboard/jellyfin/sports-check
 ```
 
-It checks every configuration with Live TV (one answer, or `configurations` with one per
-configuration). One configuration alone, with its own page open with every profile:
+It checks every configuration with Live TV, once for each guide: `guides`, each naming the
+`configurations` that share it. One configuration alone, with its own page open with every profile:
 `/api/dashboard/jellyfin/<configuration UUID>/sports-check`, the UUID being the one in the server
 address the apps use (`/jellyfin/<UUID>`). It reads
 the games from 6 hours ago to 30 hours ahead, and the whole guide over that time, and answers with:
@@ -89,7 +93,12 @@ the games from 6 hours ago to 30 hours ahead, and the whole guide over that time
 - `unmatchedProgrammes`: programmes named like a game ("X at Y", "X v Y") and marked live or as sport
   that matched no game: a league not read, or a team named in a way not yet known.
 - `unmatchedChannels`: channels named like a game that matched none.
+- `nearMisses`: games found on no channel, each with up to five programmes within three hours of
+  its start that name one of its teams: where a guide names a team in a way not yet known, or a game
+  is listed at a time too far from ESPN's.
 - `failed`: leagues whose scoreboard couldn't be read.
+
+The whole guide is read, a thousand channels at a time.
 
 It reads the whole guide, so on a large one it takes a few seconds.
 

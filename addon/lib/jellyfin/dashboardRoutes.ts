@@ -23,17 +23,21 @@ export function registerJellyfinDashboardRoutes(addon: any, deps: any): void {
   // Ahead of the routes that take a configuration's id in this place.
   addon.get("/api/dashboard/jellyfin/sports-check", requireDashboardAdmin, async (req, res) => {
     try {
+      // Configurations with the same Live TV share one guide: checked once, naming them all.
       const checks: any[] = [];
       for (const userUUID of ((await database.getAllUserUUIDs().catch(() => [])) as string[]).slice(0, 50)) {
         const config = await database.getUserConfig(userUUID).catch(() => null);
         const check = config ? await require('./index').checkSports(config) : null;
-        if (check) checks.push({ configuration: userUUID, ...check });
+        if (!check) continue;
+        const same = checks.find((held) => held.guide === check.guide);
+        if (same) same.configurations.push(userUUID);
+        else checks.push({ configurations: [userUUID], ...check });
       }
       if (!checks.length) {
         res.status(404).json({ error: 'No configuration has Live TV' });
         return;
       }
-      res.json(checks.length === 1 ? checks[0] : { configurations: checks });
+      res.json({ guides: checks });
     } catch (error) {
       consola.error('[Dashboard API] Error:', error);
       res.status(500).json({ error: 'Failed to check the guide against the day\'s games' });

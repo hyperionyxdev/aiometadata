@@ -18,8 +18,16 @@ interface CheckedChannel {
   programme?: string;
 }
 
+interface NearMiss {
+  league: string;
+  game: string;
+  start: string;
+  programmes: Array<{ channel: string; number?: string; programme: string; start: string }>;
+}
+
 interface Check {
-  configuration?: string;
+  /** The configurations sharing this guide. */
+  configurations?: string[];
   checkedAt: string;
   from: string;
   to: string;
@@ -31,6 +39,7 @@ interface Check {
   games: Array<{ league: string; game: string; start: string; state: string; detail: string; channels: CheckedChannel[] }>;
   unmatchedProgrammes: Array<{ channel: string; number?: string; programme: string; start: string }>;
   unmatchedChannels: Array<{ channel: string; number?: string }>;
+  nearMisses?: NearMiss[];
 }
 
 const when = (iso: string) => new Date(iso).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
@@ -48,6 +57,12 @@ function asText(checks: Check[]): string {
     for (const p of check.unmatchedProgrammes) lines.push(`  ${when(p.start)} · ${named(p)} · ${p.programme}`);
     lines.push(`Channels named like a game that matched none (${check.unmatchedChannels.length}):`);
     for (const c of check.unmatchedChannels) lines.push(`  ${named(c)}`);
+    const near = check.nearMisses ?? [];
+    lines.push(`Games on no channel, with programmes near them naming a team (${near.length}):`);
+    for (const miss of near) {
+      lines.push(`  ${miss.league} · ${miss.game} · ${when(miss.start)}`);
+      for (const p of miss.programmes) lines.push(`      ${when(p.start)} · ${named(p)} · ${p.programme}`);
+    }
     lines.push("");
   }
   return lines.join("\n");
@@ -112,6 +127,23 @@ function CheckResult({ check }: { check: Check }) {
           </ul>
         )}
       </div>
+      <div className="space-y-1">
+        <p className="text-sm font-medium">Games on no channel, with programmes near them naming a team ({check.nearMisses?.length ?? 0})</p>
+        {!check.nearMisses?.length ? (
+          <p className="text-sm text-muted-foreground">None.</p>
+        ) : (
+          <ul className="max-h-64 overflow-y-auto text-sm space-y-1">
+            {check.nearMisses.map((miss, n) => (
+              <li key={n}>
+                <span>{miss.game}</span> <span className="text-muted-foreground">· {miss.league} · {when(miss.start)}</span>
+                {miss.programmes.map((p, m) => (
+                  <div key={m} className="pl-2 text-muted-foreground">{p.programme} · {named(p)} · {when(p.start)}</div>
+                ))}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
       <div className="space-y-2">
         <Button variant="ghost" size="sm" onClick={() => setShowGames((on) => !on)}>
           {showGames ? "Hide the games" : `Show every game (${check.games.length})`}
@@ -160,7 +192,7 @@ export function SportsCheck() {
       const response = await fetch("/api/dashboard/jellyfin/sports-check", { headers });
       const body = await response.json().catch(() => null);
       if (!response.ok) throw new Error(body?.error || `The check failed (${response.status})`);
-      setChecks(Array.isArray(body?.configurations) ? body.configurations : [body]);
+      setChecks(Array.isArray(body?.guides) ? body.guides : [body]);
     } catch (err: any) {
       setError(err?.message || "The check failed");
     } finally {
@@ -202,7 +234,11 @@ export function SportsCheck() {
       {error && <p className="text-sm text-red-400">{error}</p>}
       {checks?.map((check, n) => (
         <div key={n} className="space-y-2">
-          {checks.length > 1 && <p className="text-sm font-medium">Configuration {check.configuration?.slice(0, 8)}</p>}
+          {checks.length > 1 && (
+            <p className="text-sm font-medium">
+              {check.configurations?.length === 1 ? "Configuration" : "Configurations"} {check.configurations?.map((id) => id.slice(0, 8)).join(", ")}
+            </p>
+          )}
           <CheckResult check={check} />
         </div>
       ))}

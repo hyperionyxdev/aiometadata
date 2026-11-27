@@ -266,7 +266,7 @@ export class Scoreboard {
   }
 
   private async read(league: League, day: string): Promise<Held> {
-    const url = `${this.base}/${league.path}/scoreboard?dates=${day}`;
+    const url = `${this.base}/${league.path}/scoreboard?dates=${day}${league.query ? `&${league.query}` : ''}`;
     try {
       const response = await this.fetcher(url, {
         headers: { accept: 'application/json', 'user-agent': 'AIOMetadata' },

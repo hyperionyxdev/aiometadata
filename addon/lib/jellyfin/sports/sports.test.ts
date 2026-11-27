@@ -14,6 +14,7 @@ import { gameOfChannel, gamesNamed, looksLikeGame, namesOf, showsGame, TeamNames
 import { sportsCheck } from './check';
 import { channelsByGame, GameFinder, gameInfo, ranked } from './guide';
 import { forgetGames, gameTagger, teamLogo } from './serve';
+import { programmesInParts } from './live';
 import { sportsLeagues, sportsOn } from './settings';
 import { programItem } from '../livetv/items';
 import type { ListedChannel } from '../livetv/lineup';
@@ -75,7 +76,7 @@ let asked: string[] = [];
 before(async () => {
   fake = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://fake');
-    asked.push(`${url.pathname}?${url.searchParams.get('dates')}`);
+    asked.push(`${url.pathname}?${url.searchParams.get('dates')}${url.searchParams.get('groups') ? `|groups=${url.searchParams.get('groups')}` : ''}`);
     const today = url.searchParams.get('dates') === espnDay(now);
     const bodies: Record<string, any> = {
       '/basketball/nba/scoreboard': nbaDay,
@@ -166,6 +167,23 @@ test('a guide names a game in its own words; both teams must be named', () => {
   assert.deepEqual(named('Knicks Postgame'), []);
 });
 
+test("a Spanish guide's names for countries are ESPN's", () => {
+  assert.deepEqual(wordsOf('Estados Unidos vs. El Salvador'), ['united', 'states', 'vs', 'el', 'salvador']);
+  assert.deepEqual(wordsOf('Inglaterra vs. Corea del Sur'), ['england', 'vs', 'south', 'korea']);
+  assert.deepEqual(wordsOf('Trinidad y Tobago'), ['trinidad', 'and', 'tobago']);
+  const country = (id: string, name: string) => ({ id, location: name, name, abbreviation: id, displayName: name, shortDisplayName: name });
+  const concacaf = leagueByKey('concacafw')!;
+  const games = gamesOf({ events: [
+    event('w1', now, 'pre', country('SLV', 'El Salvador'), country('USA', 'United States')),
+    event('w2', now + 3 * HOUR, 'pre', country('HAI', 'Haiti'), country('MEX', 'Mexico')),
+  ] }, concacaf);
+  const names = new TeamNames(games);
+  assert.deepEqual(gamesNamed('Campeonato W de Concacaf 2026 · Cuartos de final: Estados Unidos vs. El Salvador', games, names).map((g) => g.id), ['concacafw:w1']);
+  assert.deepEqual(gamesNamed('Cuartos de final: México vs. Haití', games, names).map((g) => g.id), ['concacafw:w2']);
+  const gleague = gamesOf({ events: [event('g1', now, 'pre', team('1', 'Austin', 'Spurs', 'AUS'), team('2', 'Mexico City', 'Capitanes', 'MXC'))] }, leagueByKey('gleague')!);
+  assert.deepEqual(gamesNamed('Baloncesto NBA G League · Capitanes CDMX vs. Austin Spurs', gleague, new TeamNames(gleague)).map((g) => g.id), ['gleague:g1']);
+});
+
 test('a name inside a longer one is the longer one: Michigan State is not Michigan', () => {
   const games = allGames();
   const names = new TeamNames(games);
@@ -182,6 +200,8 @@ test('a programme shows the game when it runs into it, not a preview or a replay
   assert.equal(showsGame({ start: now - HOUR, end: now }, game), false, 'a preview');
   assert.equal(showsGame({ start: now + 6 * HOUR, end: now + 8 * HOUR }, game), false, 'a replay');
   assert.equal(showsGame({ start: now - 3 * HOUR, end: now + HOUR }, game), false, 'a long build-up');
+  assert.equal(showsGame({ start: now + HOUR, end: now + 4 * HOUR }, game), true, 'a guide an hour out');
+  assert.equal(showsGame({ start: now + 2 * HOUR, end: now + 4 * HOUR }, game), false, 'two hours in');
 });
 
 test("a channel named for a game is the one under way, else the next", () => {
@@ -194,6 +214,29 @@ test("a channel named for a game is the one under way, else the next", () => {
   assert.equal(looksLikeGame('NBA | Heat v Knicks'), true);
   assert.equal(looksLikeGame('Sports Center'), false);
   assert.equal(looksLikeGame('Coming up: NBA Basketball today at 4:30 PM PST'), false);
+  for (const name of ['FI: V Sport Ultra HD', 'Flying V Fights', '24/7 Men at Work', '24/7 Live at the Apollo']) {
+    assert.equal(looksLikeGame(name), false, name);
+  }
+  assert.equal(looksLikeGame('NFL | 4k - SNF 8:20pm Raiders at Browns'), true);
+  assert.equal(looksLikeGame('Cuartos de final: México vs. Haití'), true);
+});
+
+test("college basketball is read whole, not the scoreboard's featured games", async () => {
+  asked = [];
+  const board = new Scoreboard({ base, now: () => now });
+  await board.day(leagueByKey('ncaam')!, espnDay(now));
+  assert.deepEqual(asked, [`/basketball/mens-college-basketball/scoreboard?${espnDay(now)}|groups=50`]);
+});
+
+test('a guide is read a thousand channels at a time', async () => {
+  const many = Array.from({ length: 2500 }, (_, n): ListedChannel => ({ meta: { type: 'tv', id: String(n), name: `Channel ${n}` } }));
+  const sizes: number[] = [];
+  const all = await programmesInParts(async (metas) => {
+    sizes.push(metas.length);
+    return new Map(metas.map((meta) => [`tv|${meta.id}`, []]));
+  }, many);
+  assert.deepEqual(sizes, [1000, 1000, 500]);
+  assert.equal(all.size, 2500);
 });
 
 test('a league is read once while kept, and one that fails says so', async () => {
@@ -222,6 +265,7 @@ test('the check matches games to channels, by a programme or by the channel, and
     channel('college', 'College Network', '103'),
     channel('other', 'Hockey Channel', '104'),
     channel('event', 'NHL | Bruins v Rangers', '902'),
+    channel('preview', 'Campus Channel', '105'),
   ];
   const programme = (title: string, start: number, end: number, extra: Partial<Programme> = {}): Programme => ({ id: `${title}-${start}`, title, start, end, ...extra });
   const guide = new Map<string, Programme[]>([
@@ -237,6 +281,7 @@ test('the check matches games to channels, by a programme or by the channel, and
     ]],
     ['tv|college', [programme('College Football: Ohio St. at Michigan', now + 0.5 * HOUR, now + 4.5 * HOUR, { live: true })]],
     ['tv|other', [programme('Bruins at Rangers', now + HOUR, now + 3.5 * HOUR, { live: true, genres: ['Sports'] })]],
+    ['tv|preview', [programme('Spartans Preview', now + 0.5 * HOUR, now + HOUR)]],
   ]);
   const board = new Scoreboard({ base, now: () => now });
   const check = await sportsCheck({ channels: async () => channels, programmes: async () => guide }, board, now);
@@ -247,11 +292,15 @@ test('the check matches games to channels, by a programme or by the channel, and
   assert.deepEqual(channelsOf('Penn State Nittany Lions at Michigan State Spartans'), []);
   assert.deepEqual(check.unmatchedProgrammes.map((p) => p.programme), ['Bruins at Rangers']);
   assert.deepEqual(check.unmatchedChannels.map((c) => c.channel), ['NHL | Bruins v Rangers']);
+  // Penn State at Michigan State is on no channel; a programme near it names one of its teams.
+  assert.deepEqual(check.nearMisses.map((m) => [m.game, m.programmes.map((p) => p.programme)]), [
+    ['Penn State Nittany Lions at Michigan State Spartans', ['Spartans Preview']],
+  ]);
   assert.deepEqual(check.failed, [{ league: 'NHL', why: 'HTTP 500' }]);
   const nbaRow = check.leagues.find((row) => row.league === 'NBA');
   assert.deepEqual(nbaRow, { league: 'NBA', games: 3, withChannels: 2 });
-  assert.equal(check.channels, 6);
-  assert.equal(check.channelsWithGuide, 5);
+  assert.equal(check.channels, 7);
+  assert.equal(check.channelsWithGuide, 6);
 });
 
 const listed = (id: string, name: string, number?: string): ListedChannel => ({ meta: { type: 'tv', id, name }, ...(number ? { number } : {}) });

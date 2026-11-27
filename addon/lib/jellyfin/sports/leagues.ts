@@ -10,13 +10,16 @@ export interface League {
   /** How it's shown. */
   name: string;
   sport: 'basketball' | 'football' | 'hockey' | 'baseball' | 'soccer';
+  /** More of the scoreboard's query: college basketball lists a few featured games unless asked for all of Division I. */
+  query?: string;
 }
 
 export const LEAGUES: League[] = [
   { key: 'nba', path: 'basketball/nba', name: 'NBA', sport: 'basketball' },
   { key: 'wnba', path: 'basketball/wnba', name: 'WNBA', sport: 'basketball' },
-  { key: 'ncaam', path: 'basketball/mens-college-basketball', name: 'College Basketball', sport: 'basketball' },
-  { key: 'ncaaw', path: 'basketball/womens-college-basketball', name: "Women's College Basketball", sport: 'basketball' },
+  { key: 'gleague', path: 'basketball/nba-development', name: 'NBA G League', sport: 'basketball' },
+  { key: 'ncaam', path: 'basketball/mens-college-basketball', name: 'College Basketball', sport: 'basketball', query: 'groups=50&limit=500' },
+  { key: 'ncaaw', path: 'basketball/womens-college-basketball', name: "Women's College Basketball", sport: 'basketball', query: 'groups=50&limit=500' },
   { key: 'nfl', path: 'football/nfl', name: 'NFL', sport: 'football' },
   { key: 'ncaaf', path: 'football/college-football', name: 'College Football', sport: 'football' },
   { key: 'nhl', path: 'hockey/nhl', name: 'NHL', sport: 'hockey' },
@@ -36,6 +39,8 @@ export const LEAGUES: League[] = [
   { key: 'copamx', path: 'soccer/mex.copa_mx', name: 'Copa MX', sport: 'soccer' },
   { key: 'concacaf', path: 'soccer/concacaf.champions', name: 'Concacaf Champions Cup', sport: 'soccer' },
   { key: 'leaguescup', path: 'soccer/concacaf.leagues.cup', name: 'Leagues Cup', sport: 'soccer' },
+  { key: 'concacafw', path: 'soccer/concacaf.womens.championship', name: 'Concacaf W Championship', sport: 'soccer' },
+  { key: 'wgoldcup', path: 'soccer/concacaf.w.gold', name: 'Concacaf W Gold Cup', sport: 'soccer' },
   { key: 'ucl', path: 'soccer/uefa.champions', name: 'Champions League', sport: 'soccer' },
   { key: 'uel', path: 'soccer/uefa.europa', name: 'Europa League', sport: 'soccer' },
 ];

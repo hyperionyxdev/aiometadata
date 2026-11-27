@@ -5,12 +5,16 @@ import type { Programme } from '../livetv/programmes';
 import { LEAGUES } from './leagues';
 import type { Game, Scoreboard } from './espn';
 import { channelsByGame, GameFinder } from './guide';
-import { looksLikeGame } from './match';
+import { looksLikeGame, teamKey } from './match';
 
 const HOUR = 60 * 60 * 1000;
 const BEHIND_MS = 6 * HOUR;
 const AHEAD_MS = 30 * HOUR;
 const MAX_LISTED = 300;
+// Around a game not found: programmes this near its start that name one of its teams.
+const NEAR_MS = 3 * HOUR;
+const NEAR_PER_GAME = 5;
+const MAX_NEAR_GAMES = 150;
 
 /**
  * How well a configuration's guide is matched to the day's games: each game with the channels found
@@ -39,7 +43,16 @@ export interface CheckedGame {
   channels: CheckedChannel[];
 }
 
+export interface NearMiss {
+  league: string;
+  game: string;
+  start: string;
+  programmes: Array<{ channel: string; number?: string; programme: string; start: string }>;
+}
+
 export interface SportsCheck {
+  /** Which guide it is: configurations with the same Live TV share one. */
+  guide?: string;
   checkedAt: string;
   from: string;
   to: string;
@@ -53,6 +66,8 @@ export interface SportsCheck {
   unmatchedProgrammes: Array<{ channel: string; number?: string; programme: string; start: string }>;
   /** Channels named like a game that matched none. */
   unmatchedChannels: Array<{ channel: string; number?: string }>;
+  /** Games found on no channel, with programmes near their start that name one of their teams. */
+  nearMisses: NearMiss[];
 }
 
 const keyOf = (channel: ListedChannel): string => `${channel.meta.type}|${channel.meta.id}`;
@@ -95,6 +110,49 @@ export async function sportsCheck(source: CheckSource, board: Scoreboard, now: n
     }
   }
 
+  // Programmes naming a team, near enough a game of it found nowhere to be worth a look.
+  const unfound = games.filter((game) => !found.has(game.id));
+  const byTeam = new Map<string, Array<{ channel: ListedChannel; programme: Programme }>>();
+  if (unfound.length) {
+    const wanted = new Set(unfound.flatMap((game) => [teamKey(game, game.home), teamKey(game, game.away)]));
+    for (const channel of channels) {
+      for (const programme of guide.get(keyOf(channel)) ?? []) {
+        if (programme.start < from - NEAR_MS || programme.start > to + NEAR_MS) continue;
+        for (const team of finder.teamsIn(textOf(programme))) {
+          if (!wanted.has(team)) continue;
+          const list = byTeam.get(team) ?? [];
+          list.push({ channel, programme });
+          byTeam.set(team, list);
+        }
+      }
+    }
+  }
+  const nearMisses: NearMiss[] = [];
+  for (const game of unfound) {
+    if (nearMisses.length >= MAX_NEAR_GAMES) break;
+    const seen = new Set<string>();
+    const near = [...(byTeam.get(teamKey(game, game.home)) ?? []), ...(byTeam.get(teamKey(game, game.away)) ?? [])]
+      .filter(({ programme }) => Math.abs(programme.start - game.start) <= NEAR_MS)
+      .filter(({ channel, programme }) => {
+        const key = `${keyOf(channel)}|${programme.start}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .sort((a, b) => Math.abs(a.programme.start - game.start) - Math.abs(b.programme.start - game.start))
+      .slice(0, NEAR_PER_GAME);
+    if (!near.length) continue;
+    nearMisses.push({
+      league: game.leagueName,
+      game: game.name,
+      start: iso(game.start),
+      programmes: near.map(({ channel, programme }) => {
+        const number = numberOf(channel);
+        return { channel: channel.meta.name, ...(number ? { number } : {}), programme: textOf(programme), start: iso(programme.start) };
+      }),
+    });
+  }
+
   const leagues = LEAGUES.map((league) => {
     const own = games.filter((game) => game.league === league.key);
     return { league: league.name, games: own.length, withChannels: own.filter((game) => found.has(game.id)).length };
@@ -119,5 +177,6 @@ export async function sportsCheck(source: CheckSource, board: Scoreboard, now: n
     })),
     unmatchedProgrammes,
     unmatchedChannels,
+    nearMisses,
   };
 }

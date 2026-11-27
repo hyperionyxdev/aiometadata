@@ -35,6 +35,11 @@ export class GameFinder {
     this.names = new TeamNames(games);
   }
 
+  /** The teams a text names, as `league:team` keys. */
+  teamsIn(text: string): Set<string> {
+    return this.names.teamsIn(text);
+  }
+
   /** The game a channel's own name is for, if it's named for one. */
   channelGame(channel: ListedChannel): Game | undefined {
     const key = keyOf(channel);
