@@ -9,10 +9,10 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { registerRecordings, type RecordingRouteDeps } from './jellyfin';
-import { RecordingOwners, useRecordingOwners } from './owners';
+import { registerRecordings, slotIdOf, slotNumberOf, type RecordingRouteDeps } from './jellyfin';
+import { RecordingOwners, recordingOwners, useRecordingOwners } from './owners';
 import { profileUserId } from '../profiles';
-import type { ChannelRef, ProgrammeInfo, RecordAsk, Recorder, RecordingEntry, SeriesAsk, SeriesEntry } from './types';
+import type { ChannelRef, ProgrammeInfo, RecordAsk, Recorder, RecordingEntry, SeriesAsk, SeriesEntry, SlotAsk, SlotEntry } from './types';
 
 const HOUSEHOLD = '11111111-1111-4111-8111-111111111111';
 const NEIGHBOURS = '22222222-2222-4222-8222-222222222222';
@@ -24,6 +24,7 @@ class FakeRecorder implements Recorder {
   readonly kind = 'local' as const;
   entries = new Map<number, RecordingEntry>();
   rules = new Map<number, SeriesEntry>();
+  slotList = new Map<number, SlotEntry>();
   removed: number[] = [];
   cancelled: number[] = [];
   private next = 1;
@@ -48,6 +49,16 @@ class FakeRecorder implements Recorder {
     return rule;
   }
   async removeSeries(id: number) { this.rules.delete(id); }
+  async slots() { return [...this.slotList.values()]; }
+  async addSlot(ask: SlotAsk): Promise<SlotEntry> {
+    const slot: SlotEntry = {
+      id: this.next++, name: ask.name || ask.channel.name, channel: ask.channel, days: ask.days, start: '20:00:00', end: '21:00:00',
+      from: '2030-01-07', until: '2030-04-07', timeZone: 'UTC', next: { start: ask.start, end: ask.end }, last: null,
+    };
+    this.slotList.set(slot.id, slot);
+    return slot;
+  }
+  async removeSlot(id: number) { this.slotList.delete(id); }
   async open() { return null; }
   async close() {}
 
@@ -232,4 +243,53 @@ test('a series shared by two profiles is only left by one of them', async () => 
   assert.equal(listed.aiostreams.manage, true);
   await router.call('DELETE', `/LiveTv/SeriesTimers/${rule.Id}`, PARTNER);
   assert.equal(recorder.rules.size, 0);
+});
+
+async function setSlot(who: string): Promise<any> {
+  const res = await router.call('POST', '/LiveTv/SeriesTimers', who, {}, {
+    ChannelId: 'channel-news', Name: 'Evening News', StartDate: new Date(PROGRAMME.start).toISOString(), EndDate: new Date(PROGRAMME.end).toISOString(), Days: ['Monday'], TimeZone: 'UTC',
+  });
+  assert.equal(res.statusCode, 200);
+  return res.body;
+}
+
+test('a repeating schedule shared by two profiles is only left by one of them', async () => {
+  const slot = await setSlot(KID);
+  assert.match(slot.Id, /^d53[0-9a-f]{29}$/);
+  const id = slotNumberOf(slot.Id) as number;
+  // The same schedule wanted by another profile.
+  recordingOwners().add('slot', 'local', id, PARTNER);
+  assert.equal((await router.call('DELETE', `/LiveTv/SeriesTimers/${slot.Id}`, NEIGHBOURS)).statusCode, 403);
+  assert.equal((await router.call('DELETE', `/LiveTv/SeriesTimers/${slot.Id}`, KID)).statusCode, 204);
+  assert.equal(recorder.slotList.size, 1, 'removed for everyone by one of its owners');
+  const listed = (await router.call('GET', '/LiveTv/SeriesTimers', PARTNER)).body.Items[0];
+  assert.equal(listed.Id, slot.Id);
+  assert.equal(listed.aiostreams.mine, true);
+  assert.equal(listed.aiostreams.manage, true);
+  assert.equal((await router.call('GET', `/LiveTv/SeriesTimers/${slot.Id}`, KID)).body.aiostreams.mine, false);
+  await router.call('DELETE', `/LiveTv/SeriesTimers/${slot.Id}`, PARTNER);
+  assert.equal(recorder.slotList.size, 0);
+  assert.deepEqual(new RecordingOwners(file).owners('slot', 'local', id), [], 'who set it is forgotten with it');
+});
+
+test('who set a repeating schedule owns the recordings it sets', async () => {
+  const slot = await setSlot(KID);
+  const id = slotNumberOf(slot.Id) as number;
+  const entry: RecordingEntry = { id: 900, channel: CHANNEL, start: PROGRAMME.start, end: PROGRAMME.end, state: 'scheduled', playable: false, slotId: id };
+  recorder.entries.set(entry.id, entry);
+  const timer = (await router.call('GET', '/LiveTv/Timers', KID)).body.Items.find((item: any) => item.SeriesTimerId === slotIdOf(id));
+  assert.ok(timer, 'the recording carries its schedule');
+  assert.deepEqual(timer.aiostreams.owners, [profileUserId(HOUSEHOLD, 'kid')]);
+  assert.equal(timer.aiostreams.mine, true);
+  assert.equal((await router.call('GET', '/LiveTv/Timers', PARTNER, { SeriesTimerId: slot.Id })).body.Items[0].aiostreams.mine, false);
+  assert.equal((await router.call('DELETE', `/LiveTv/Timers/${timer.Id}`, PARTNER)).statusCode, 403);
+});
+
+test('owners kept before repeating schedules were read as none', () => {
+  fs.writeFileSync(file, JSON.stringify({ recordings: { 'local:1': [KID] }, series: {} }));
+  const store = new RecordingOwners(file);
+  assert.deepEqual(store.owners('slot', 'local', 1), []);
+  assert.deepEqual(store.owners('recording', 'local', 1), [KID]);
+  store.add('slot', 'local', 2, KID);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).slots, { 'local:2': [KID] });
 });

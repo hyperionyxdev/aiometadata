@@ -2,6 +2,7 @@
 // Copyright (C) 2026 cedya77 and AIOMetadata contributors, see NOTICE
 import { createHash } from 'crypto';
 import path from 'path';
+import consola from 'consola';
 import { Readable } from 'stream';
 import type { DispatcharrLive } from '../dispatcharr';
 import { DispatcharrError } from '../dispatcharr/client';
@@ -17,9 +18,14 @@ import {
   type RecordingState,
   type SeriesAsk,
   type SeriesEntry,
+  type SlotAsk,
+  type SlotEntry,
 } from './types';
 import { readAdMarks, type AdBreak } from './adMarks';
+import { dayText, isTimeZone, lastOf, nextOf, readRepeat, repeatRuleOf, timeText } from './repeats';
 import { dispatcharrRecordingsFolder } from './settings';
+
+const logger = consola.withTag('JellyfinRecordings');
 
 // The recordings list is read at most this often: a guide page asks for its marks, and a timer
 // list for its rows, often together.
@@ -89,8 +95,9 @@ export class DispatcharrRecorder implements Recorder {
   readonly kind = 'dispatcharr' as const;
   private rows: { at: number; rows: any[] } | null = null;
   private rowsLoading: Promise<any[]> | null = null;
-  private pad: { at: number; pre: number; post: number } | null = null;
+  private dvr: { at: number; pre: number; post: number; zone: string; known: boolean } | null = null;
   private ruleRows: { at: number; rules: any[] } | null = null;
+  private slotRows: { at: number; rules: any[] } | null = null;
 
   constructor(private readonly live: DispatcharrLive, private readonly now: () => number = Date.now) {}
 
@@ -99,17 +106,38 @@ export class DispatcharrRecorder implements Recorder {
   }
 
   async padding(): Promise<{ pre: number; post: number }> {
-    if (this.pad && this.now() - this.pad.at < PADDING_MS) return { pre: this.pad.pre, post: this.pad.post };
+    const { pre, post } = await this.dvrSettings();
+    return { pre, post };
+  }
+
+  /**
+   * Dispatcharr's padding (whole minutes, as it adds them) and its time zone, the one its repeating
+   * schedules are kept in, from its settings; `known` says they could be read.
+   */
+  private async dvrSettings(): Promise<{ pre: number; post: number; zone: string; known: boolean }> {
+    if (this.dvr && this.now() - this.dvr.at < PADDING_MS) return this.dvr;
     try {
       const settings = await this.live.client.list('/api/core/settings/');
-      const dvr = settings.find((row) => row?.key === 'dvr_settings')?.value;
-      const value = typeof dvr === 'string' ? JSON.parse(dvr) : dvr;
-      this.pad = { at: this.now(), pre: (numberOf(value?.pre_offset_minutes) ?? 0) * 60, post: (numberOf(value?.post_offset_minutes) ?? 0) * 60 };
+      const valueOf = (key: string): any => {
+        const value = settings.find((row) => row?.key === key)?.value;
+        if (typeof value !== 'string') return value;
+        try {
+          return JSON.parse(value);
+        } catch {
+          return null;
+        }
+      };
+      const dvr = valueOf('dvr_settings');
+      const minutes = (value: unknown) => Math.max(0, Math.trunc(numberOf(value) ?? 0));
+      // Unset, Dispatcharr's zone is UTC.
+      const zone = textOf(valueOf('system_settings')?.time_zone) || 'UTC';
+      if (!isTimeZone(zone)) logger.warn(`Dispatcharr's time zone (${zone.slice(0, 60)}) isn't one known here; UTC is used for its repeating recordings`);
+      this.dvr = { at: this.now(), pre: minutes(dvr?.pre_offset_minutes) * 60, post: minutes(dvr?.post_offset_minutes) * 60, zone: isTimeZone(zone) ? zone : 'UTC', known: true };
     } catch {
       // Dispatcharr's settings need a login that may read them; without it, no padding is shown.
-      this.pad = { at: this.now(), pre: 0, post: 0 };
+      this.dvr = { at: this.now(), pre: 0, post: 0, zone: 'UTC', known: false };
     }
-    return { pre: this.pad.pre, post: this.pad.post };
+    return this.dvr;
   }
 
   private async readRows(fresh = false): Promise<any[]> {
@@ -129,6 +157,7 @@ export class DispatcharrRecorder implements Recorder {
   private forget(): void {
     this.rows = null;
     this.ruleRows = null;
+    this.slotRows = null;
   }
 
   private refused(error: any, doing: 'read' | 'record' | 'change'): Error {
@@ -158,7 +187,9 @@ export class DispatcharrRecorder implements Recorder {
     const state = stateOf(row, this.now());
     const program = props.program && typeof props.program === 'object' ? props.program : null;
     const programme = programmeOf(program, props);
-    const rule = program ? rules.find((r) => ruleSets(r, program, channelId)) : undefined;
+    // Set by a repeating schedule (a recurring rule), it's that one's; otherwise a series' whose title it is.
+    const slotId = props.rule && typeof props.rule === 'object' && textOf(props.rule.type) === 'recurring' ? numberOf(props.rule.id) : undefined;
+    const rule = slotId === undefined && program ? rules.find((r) => ruleSets(r, program, channelId)) : undefined;
     const size = numberOf(props.bytes_written);
     return {
       id,
@@ -168,6 +199,7 @@ export class DispatcharrRecorder implements Recorder {
       end,
       state,
       ...(rule ? { seriesId: seriesIdOf(rule) } : {}),
+      ...(slotId !== undefined ? { slotId } : {}),
       playable: state !== 'scheduled' && (typeof props.file_url === 'string' || typeof props.output_file_url === 'string'),
       ...(size !== undefined ? { size } : {}),
       ...(state === 'interrupted' ? { error: props.interrupted_reason ? interruptedWords(props.interrupted_reason) : "It didn't record" } : {}),
@@ -211,9 +243,11 @@ export class DispatcharrRecorder implements Recorder {
     let body: any;
     if (programme) {
       // Set already (here, in Dispatcharr's web app, or by a series rule) and still to come or under
-      // way: that one is the answer. One that failed, or is over, isn't: recorded afresh.
+      // way: that one is the answer. One that failed, or is over, isn't: recorded afresh. A window set
+      // by hand with another name, or a repeating one's, starting then too isn't the programme.
       const same = (await this.readRows(true)).find((row) => numberOf(row?.channel) === channel.id
-        && timeOf(row?.custom_properties?.program?.start_time) === programme.start);
+        && timeOf(row?.custom_properties?.program?.start_time) === programme.start
+        && textOf(row?.custom_properties?.program?.title).toLowerCase() === programme.title.trim().toLowerCase());
       if (same) {
         const entry = this.entryOf(same, lineup, await this.rules().catch(() => []));
         if (entry && (entry.state === 'scheduled' || entry.state === 'recording')) return entry;
@@ -245,8 +279,25 @@ export class DispatcharrRecorder implements Recorder {
       const start = Number(ask.start);
       const end = Number(ask.end);
       if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) throw new RecorderError('A recording needs a start before its end', 400);
-      // A window set by hand, as Dispatcharr's own form sets one: no programme, no padding.
-      body = { channel: channel.id, start_time: iso(start), end_time: iso(end) };
+      const name = textOf(ask.name);
+      const dvr = name ? await this.dvrSettings() : null;
+      const pre = (dvr?.pre ?? 0) * 1000;
+      const post = (dvr?.post ?? 0) * 1000;
+      if (dvr?.known && start + pre < end - post) {
+        // Named, it goes as a programme of that name, so Dispatcharr's web app shows the name and it
+        // comes back with it. Dispatcharr pads a programme, so the window sent is drawn in by its
+        // padding, and what it records is the window asked for.
+        body = {
+          channel: channel.id,
+          start_time: iso(start + pre),
+          end_time: iso(end - post),
+          custom_properties: { program: { title: name, description: '', start_time: iso(start), end_time: iso(end) } },
+        };
+      } else {
+        // A window set by hand, as Dispatcharr's own form sets one: no programme, no padding. Named
+        // but no longer than the padding (or with the padding unknown), it goes without its name.
+        body = { channel: channel.id, start_time: iso(start), end_time: iso(end) };
+      }
     }
     let answer;
     try {
@@ -350,6 +401,78 @@ export class DispatcharrRecorder implements Recorder {
     // Dispatcharr's own Delete: the rule, and its recordings that haven't started.
     const answer = await this.change(`/api/channels/series-rules/?${query}`, 'DELETE');
     if (answer.status >= 300 && answer.status !== 404) throw new RecorderError(`Dispatcharr didn't delete the series: ${reasonOf(answer.text)}`, 502);
+  }
+
+  private async slotRules(): Promise<any[]> {
+    if (this.slotRows && this.now() - this.slotRows.at < LIST_MS) return this.slotRows.rules;
+    try {
+      const rules = (await this.live.client.list('/api/channels/recurring-rules/')).filter((r: unknown) => r && typeof r === 'object');
+      this.slotRows = { at: this.now(), rules };
+      return rules;
+    } catch (error: any) {
+      throw this.refused(error, 'read');
+    }
+  }
+
+  /** A recurring rule as a repeating schedule, on one of this server's channels; null on any other. */
+  private slotOf(rule: any, lineup: Lineup, zone: string): SlotEntry | null {
+    const id = numberOf(rule?.id);
+    const channelId = numberOf(rule?.channel);
+    if (id === undefined || channelId === undefined) return null;
+    const channel = this.channelRef(lineup, channelId);
+    const repeat = readRepeat(rule);
+    if (!channel || !repeat) return null;
+    return {
+      id,
+      name: textOf(rule.name) || channel.name,
+      channel,
+      days: repeat.days,
+      start: timeText(repeat.start),
+      end: timeText(repeat.end),
+      from: repeat.from !== null ? dayText(repeat.from) : null,
+      until: repeat.until !== null ? dayText(repeat.until) : null,
+      timeZone: zone,
+      next: nextOf(repeat, zone, this.now()),
+      last: lastOf(repeat, zone),
+    };
+  }
+
+  /** Dispatcharr's repeating schedules (its recurring rules) that are on, on this server's channels. */
+  async slots(): Promise<SlotEntry[]> {
+    const [rules, lineup, dvr] = await Promise.all([this.slotRules(), this.live.lineup(), this.dvrSettings()]);
+    return rules
+      .filter((rule) => rule.enabled !== false)
+      .map((rule) => this.slotOf(rule, lineup, dvr.zone))
+      .filter((entry): entry is SlotEntry => entry !== null);
+  }
+
+  /**
+   * A recurring rule, as Dispatcharr's own form sets one: the channel, weekdays, times of day and
+   * first and last days, in Dispatcharr's time zone. Dispatcharr then sets every recording it makes
+   * up to the last day.
+   */
+  async addSlot(ask: SlotAsk): Promise<SlotEntry> {
+    const lineup = await this.live.lineup();
+    const channel = this.dispatcharrChannel(lineup, ask.channel);
+    const dvr = await this.dvrSettings();
+    if (!dvr.known) throw new RecorderError("Dispatcharr's time zone couldn't be read, so a repeating recording can't be set (its login needs to read Dispatcharr's settings)", 502);
+    const rule = repeatRuleOf(ask, dvr.zone, this.now());
+    const body = { channel: channel.id, name: textOf(ask.name).slice(0, 255), ...rule, enabled: true };
+    const answer = await this.change('/api/channels/recurring-rules/', 'POST', body);
+    if (answer.status < 200 || answer.status >= 300) throw new RecorderError(`Dispatcharr turned the repeating recording down: ${reasonOf(answer.text)}`, 400);
+    const made = parseJson(answer.text);
+    const entry = made ? this.slotOf(made, lineup, dvr.zone) : null;
+    if (!entry) throw new RecorderError("Dispatcharr's answer to the repeating recording couldn't be read", 502);
+    return entry;
+  }
+
+  async removeSlot(id: number): Promise<void> {
+    const [rules, lineup] = await Promise.all([this.slotRules(), this.live.lineup()]);
+    const rule = rules.find((r) => numberOf(r.id) === id);
+    if (!rule || !this.channelRef(lineup, numberOf(rule.channel) ?? -1)) throw new RecorderError('No such series', 404);
+    // Dispatcharr's own Delete: the rule, and its recordings that haven't started.
+    const answer = await this.change(`/api/channels/recurring-rules/${id}/`, 'DELETE');
+    if (answer.status >= 300 && answer.status !== 404) throw new RecorderError(`Dispatcharr didn't delete the repeating recording: ${reasonOf(answer.text)}`, 502);
   }
 
   /**

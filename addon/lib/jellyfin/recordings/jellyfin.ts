@@ -4,17 +4,19 @@ import { createHash } from 'crypto';
 import consola from 'consola';
 import { Readable } from 'stream';
 import { profileUserId } from '../profiles';
-import { configurationOf, recordingOwners } from './owners';
-import { RecorderError, type ChannelRef, type MediaAnswer, type ProgrammeInfo, type Recorder, type RecordingEntry, type SeriesEntry } from './types';
+import { configurationOf, recordingOwners, type OwnedKind } from './owners';
+import { DAY_NAMES } from './repeats';
+import { RecorderError, type ChannelRef, type MediaAnswer, type ProgrammeInfo, type Recorder, type RecordingEntry, type SeriesEntry, type SlotEntry } from './types';
 
 const logger = consola.withTag('JellyfinRecordings');
 
 const TICKS_PER_SECOND = 10_000_000;
-// Ids of timers and recordings (one id for both) and of series: two hex marks, a kind, then the
-// recorder's own number, 32 hex digits in all like every other id here.
+// Ids of timers and recordings (one id for both), of series and of repeating schedules: two hex
+// marks, a kind, then the recorder's own number, 32 hex digits in all like every other id here.
 const MARK = 'd5';
 const TIMER_KIND = '1';
 const SERIES_KIND = '2';
+const SLOT_KIND = '3';
 const ID_DIGITS = 29;
 
 const plain = (raw: unknown): string => String(raw ?? '').replace(/-/g, '').toLowerCase();
@@ -27,6 +29,11 @@ export function seriesTimerIdOf(id: number): string {
   return `${MARK}${SERIES_KIND}${id.toString(16).padStart(ID_DIGITS, '0')}`;
 }
 
+/** A repeating schedule's id: a series timer's to a client, of its own kind. */
+export function slotIdOf(id: number): string {
+  return `${MARK}${SLOT_KIND}${id.toString(16).padStart(ID_DIGITS, '0')}`;
+}
+
 function numberIn(raw: unknown, kind: string): number | null {
   const id = plain(raw);
   if (id.length !== 32 || !id.startsWith(MARK + kind) || !/^[0-9a-f]+$/.test(id)) return null;
@@ -37,6 +44,13 @@ function numberIn(raw: unknown, kind: string): number | null {
 /** The recorder's number for a timer's or recording's id, or null for any other id. */
 export const recordingNumberOf = (raw: unknown): number | null => numberIn(raw, TIMER_KIND);
 export const seriesNumberOf = (raw: unknown): number | null => numberIn(raw, SERIES_KIND);
+export const slotNumberOf = (raw: unknown): number | null => numberIn(raw, SLOT_KIND);
+
+/** The series timer that set a recording, a series or a repeating schedule, as its id; none for one set alone. */
+function seriesTimerOf(entry: RecordingEntry): string | undefined {
+  if (entry.seriesId !== undefined) return seriesTimerIdOf(entry.seriesId);
+  return entry.slotId !== undefined ? slotIdOf(entry.slotId) : undefined;
+}
 
 export interface RecordingRouteDeps {
   /** The recorder for this request's configuration and profile, or null when it may not record. */
@@ -71,12 +85,13 @@ const flag = (value: unknown): boolean | undefined => {
 /** The caller is its configuration's main profile: it manages its household's recordings. */
 const isMain = (req: any): boolean => !req.jellyfin?.profileId;
 
-/** Who set a recording: those who asked for it, and those of the series that set it. */
+/** Who set a recording: those who asked for it, and those of the series or repeating schedule that set it. */
 function ownersOfRecording(recorder: Recorder, entry: RecordingEntry): string[] {
   const store = recordingOwners();
   const own = store.owners('recording', recorder.kind, entry.id);
   const bySeries = entry.seriesId !== undefined ? store.owners('series', recorder.kind, entry.seriesId) : [];
-  return [...new Set([...own, ...bySeries])];
+  const bySlot = entry.slotId !== undefined ? store.owners('slot', recorder.kind, entry.slotId) : [];
+  return [...new Set([...own, ...bySeries, ...bySlot])];
 }
 
 /**
@@ -194,7 +209,8 @@ function timerDto(deps: RecordingRouteDeps, req: any, recorder: Recorder, entry:
     dto.ExternalProgramId = programId;
   }
   if (programme?.overview) dto.Overview = programme.overview;
-  if (entry.seriesId !== undefined) dto.SeriesTimerId = seriesTimerIdOf(entry.seriesId);
+  const seriesTimer = seriesTimerOf(entry);
+  if (seriesTimer) dto.SeriesTimerId = seriesTimer;
   return dto;
 }
 
@@ -230,6 +246,86 @@ function seriesDto(deps: RecordingRouteDeps, req: any, recorder: Recorder, rule:
   return dto;
 }
 
+/** Jellyfin's word for a set of weekdays (0 for Monday), where there is one. */
+function dayPatternOf(days: number[]): 'Daily' | 'Weekdays' | 'Weekends' | undefined {
+  const set = [...new Set(days)].sort((a, b) => a - b).join(',');
+  if (set === '0,1,2,3,4,5,6') return 'Daily';
+  if (set === '0,1,2,3,4') return 'Weekdays';
+  return set === '5,6' ? 'Weekends' : undefined;
+}
+
+/**
+ * A repeating schedule as a series timer: its weekdays and the next time it records (the last, once
+ * none is left), with its days, times and dates as the recorder keeps them, in its time zone.
+ */
+function slotDto(deps: RecordingRouteDeps, req: any, recorder: Recorder, slot: SlotEntry): any {
+  const shown = slot.next ?? slot.last;
+  const dto: any = {
+    Id: slotIdOf(slot.id),
+    Type: 'SeriesTimer',
+    ServerId: deps.serverIdFor(userOf(req)),
+    ExternalId: String(slot.id),
+    Name: slot.name,
+    ServiceName: serviceName(recorder),
+    ChannelId: deps.channelItemId(slot.channel),
+    ExternalChannelId: slot.channel.id,
+    ChannelName: slot.channel.name,
+    Priority: 0,
+    PrePaddingSeconds: 0,
+    PostPaddingSeconds: 0,
+    IsPrePaddingRequired: false,
+    IsPostPaddingRequired: false,
+    KeepUntil: 'UntilDeleted',
+    RecordAnyTime: false,
+    RecordAnyChannel: false,
+    RecordNewOnly: false,
+    SkipEpisodesInLibrary: false,
+    KeepUpTo: 0,
+    Days: slot.days.map((day) => DAY_NAMES[day]),
+    ImageTags: {},
+    aiostreams: {
+      ...ownershipOf(req, recordingOwners().owners('slot', recorder.kind, slot.id)),
+      repeats: {
+        days: slot.days,
+        start: slot.start.slice(0, 5),
+        end: slot.end.slice(0, 5),
+        from: slot.from,
+        until: slot.until,
+        timeZone: slot.timeZone,
+        next: slot.next ? iso(slot.next.start) : null,
+        nextEnd: slot.next ? iso(slot.next.end) : null,
+      },
+    },
+  };
+  const pattern = dayPatternOf(slot.days);
+  if (pattern) dto.DayPattern = pattern;
+  if (shown) {
+    dto.StartDate = iso(shown.start);
+    dto.EndDate = iso(shown.end);
+  }
+  return dto;
+}
+
+/** Weekdays as a client names them (Jellyfin's `Days`: "Monday" to "Sunday"), 0 for Monday; refused where one isn't a day. */
+function daysOf(raw: unknown): number[] {
+  const list: unknown[] = Array.isArray(raw) ? raw : typeof raw === 'string' && raw.trim() ? raw.split(',') : [];
+  return list.map((value) => {
+    const name = String(value ?? '').trim().toLowerCase();
+    const day = DAY_NAMES.findIndex((known) => known.toLowerCase() === name);
+    if (day < 0) throw new RecorderError(`"${String(value ?? '').trim().slice(0, 40)}" isn't a day of the week`);
+    return day;
+  });
+}
+
+/** The recorder's repeating schedules, none where it makes none or they can't be read (its title series still list). */
+async function slotsOf(recorder: Recorder): Promise<SlotEntry[]> {
+  if (!recorder.slots) return [];
+  return recorder.slots().catch((error: any) => {
+    logger.debug(`Repeating recordings couldn't be listed: ${error?.message || error}`);
+    return [];
+  });
+}
+
 function recordingDto(deps: RecordingRouteDeps, req: any, recorder: Recorder, entry: RecordingEntry): any {
   const id = timerIdOf(entry.id);
   const programme = entry.programme;
@@ -260,7 +356,8 @@ function recordingDto(deps: RecordingRouteDeps, req: any, recorder: Recorder, en
     aiostreams: { ...extrasOf(recorder, entry), ...ownershipOf(req, ownersOfRecording(recorder, entry)) },
   };
   if (entry.channel.number) item.ChannelNumber = entry.channel.number;
-  if (entry.seriesId !== undefined) item.SeriesTimerId = seriesTimerIdOf(entry.seriesId);
+  const seriesTimer = seriesTimerOf(entry);
+  if (seriesTimer) item.SeriesTimerId = seriesTimer;
   if (programme) {
     if (programme.overview) item.Overview = programme.overview;
     if (programme.episodeTitle) item.EpisodeTitle = programme.episodeTitle;
@@ -397,8 +494,9 @@ function programmesIn(body: any): any[] {
 
 /**
  * Jellyfin's recording surface over the recorder: timers (one programme or a window), series
- * timers, recordings and their playback, and marks on guide programmes set to record. Ids that
- * aren't a recording's pass on to the routes after these.
+ * timers (a programme's title, or a repeating schedule where the recorder makes them), recordings
+ * and their playback, and marks on guide programmes set to record. Ids that aren't a recording's
+ * pass on to the routes after these.
  */
 export function registerRecordings(router: any, deps: RecordingRouteDeps): void {
   const withRecorder = (handler: (req: any, res: any, recorder: Recorder) => Promise<void>) => async (req: any, res: any, next: any) => {
@@ -439,10 +537,19 @@ export function registerRecordings(router: any, deps: RecordingRouteDeps): void 
     next();
   });
 
+  // Asked with a programme, its details for its record form; without one (a channel's form for a
+  // window or a repeating schedule), the padding alone. Either way, whether the recorder repeats.
   router.get('/LiveTv/Timers/Defaults', withRecorder(async (req, res, recorder) => {
     const padding = await recorder.padding();
     const programId = field(req, 'ProgramId');
     const found = programId ? await deps.programmeOf(req, String(programId)) : null;
+    const extras: any = { repeats: typeof recorder.addSlot === 'function' };
+    const channelId = field(req, 'ChannelId');
+    if (found) extras.canRecord = recorder.canRecord(found.channel);
+    else if (!programId && channelId) {
+      const channel = await deps.channelOf(req, String(channelId)).catch((): ChannelRef | null => null);
+      if (channel) extras.canRecord = recorder.canRecord(channel);
+    }
     const dto: any = {
       Type: 'SeriesTimer',
       ServerId: deps.serverIdFor(userOf(req)),
@@ -461,6 +568,7 @@ export function registerRecordings(router: any, deps: RecordingRouteDeps): void 
       Days: [],
       DayPattern: 'Daily',
       ImageTags: {},
+      aiostreams: extras,
     };
     if (found) {
       Object.assign(dto, {
@@ -470,7 +578,6 @@ export function registerRecordings(router: any, deps: RecordingRouteDeps): void 
         Name: found.programme.title,
         StartDate: iso(found.programme.start),
         EndDate: iso(found.programme.end),
-        aiostreams: { canRecord: recorder.canRecord(found.channel) },
       });
     }
     res.json(dto);
@@ -486,7 +593,7 @@ export function registerRecordings(router: any, deps: RecordingRouteDeps): void 
       if (isActive !== undefined && (entry.state === 'recording') !== isActive) return false;
       if (isScheduled !== undefined && (entry.state === 'scheduled') !== isScheduled) return false;
       if (channelId && plain(deps.channelItemId(entry.channel)) !== plain(channelId)) return false;
-      if (seriesId && (entry.seriesId === undefined || seriesTimerIdOf(entry.seriesId) !== plain(seriesId))) return false;
+      if (seriesId && seriesTimerOf(entry) !== plain(seriesId)) return false;
       return true;
     });
     const items = entries.map((entry) => timerDto(deps, req, recorder, entry));
@@ -507,7 +614,9 @@ export function registerRecordings(router: any, deps: RecordingRouteDeps): void 
       if (!recorder.canRecord(channel)) throw new RecorderError("This channel can't be recorded here", 400);
       const start = Date.parse(String(field(req, 'StartDate') ?? ''));
       const end = Date.parse(String(field(req, 'EndDate') ?? ''));
-      entry = await recorder.record({ channel, start, end, owner: ownerOf(req) });
+      // A window may be named, for the recorder to keep where it can.
+      const name = String(field(req, 'Name') ?? '').trim();
+      entry = await recorder.record({ channel, start, end, ...(name ? { name } : {}), owner: ownerOf(req) });
     }
     // Whoever asks is one of its owners, the one set by someone else for the same programme too.
     recordingOwners().add('recording', recorder.kind, entry.id, ownerOf(req));
@@ -536,14 +645,46 @@ export function registerRecordings(router: any, deps: RecordingRouteDeps): void 
     res.status(204).end();
   }));
 
+  // Series by title first, then repeating schedules.
   router.get('/LiveTv/SeriesTimers', withRecorder(async (req, res, recorder) => {
-    const [rules, padding] = await Promise.all([recorder.series(), recorder.padding()]);
-    const items = rules.map((rule) => seriesDto(deps, req, recorder, rule, padding));
+    const [rules, padding, slots] = await Promise.all([recorder.series(), recorder.padding(), slotsOf(recorder)]);
+    const items = [...rules.map((rule) => seriesDto(deps, req, recorder, rule, padding)), ...slots.map((slot) => slotDto(deps, req, recorder, slot))];
     res.json({ Items: items, TotalRecordCount: items.length, StartIndex: 0 });
   }));
 
+  /**
+   * A repeating schedule: a channel's window (the first time it records) on weekdays, until a last
+   * day, the weekdays and day in the asker's time zone. Only a recorder that repeats makes one.
+   */
+  const addSlot = async (req: any, res: any, recorder: Recorder, channelId: string) => {
+    if (!recorder.addSlot) throw new RecorderError("Repeating recordings need Dispatcharr's DVR", 400);
+    const channel = await deps.channelOf(req, channelId);
+    if (!channel) throw new RecorderError('No such channel', 404);
+    if (!recorder.canRecord(channel)) throw new RecorderError("This channel can't be recorded here", 400);
+    const zone = String(field(req, 'TimeZone') ?? '').trim();
+    const until = String(field(req, 'RepeatUntil') ?? '').trim();
+    const slot = await recorder.addSlot({
+      channel,
+      name: String(field(req, 'Name') ?? '').trim(),
+      start: Date.parse(String(field(req, 'StartDate') ?? '')),
+      end: Date.parse(String(field(req, 'EndDate') ?? '')),
+      days: daysOf(field(req, 'Days')),
+      ...(zone ? { timeZone: zone } : {}),
+      ...(until ? { until } : {}),
+      owner: ownerOf(req),
+    });
+    recordingOwners().add('slot', recorder.kind, slot.id, ownerOf(req));
+    logger.info("A repeating recording was set on Dispatcharr's DVR");
+    res.status(200).json(slotDto(deps, req, recorder, slot));
+  };
+
   router.post('/LiveTv/SeriesTimers', withRecorder(async (req, res, recorder) => {
     const programId = field(req, 'ProgramId');
+    const channelId = field(req, 'ChannelId');
+    if (!programId && channelId) {
+      await addSlot(req, res, recorder, String(channelId));
+      return;
+    }
     const found = programId ? await deps.programmeOf(req, String(programId)) : null;
     if (!found) throw new RecorderError('A series is set from one of its programmes in the guide', 400);
     if (!recorder.canRecord(found.channel)) throw new RecorderError("This channel can't be recorded here", 400);
@@ -560,6 +701,13 @@ export function registerRecordings(router: any, deps: RecordingRouteDeps): void 
   }));
 
   router.get('/LiveTv/SeriesTimers/:timerId', withRecorder(async (req, res, recorder) => {
+    const slotId = slotNumberOf(req.params.timerId);
+    if (slotId) {
+      const slot = recorder.slots ? (await recorder.slots()).find((s) => s.id === slotId) : undefined;
+      if (!slot) throw new RecorderError('No such series', 404);
+      res.json(slotDto(deps, req, recorder, slot));
+      return;
+    }
     const id = seriesNumberOf(req.params.timerId);
     const rule = id ? (await recorder.series()).find((r) => r.id === id) : undefined;
     if (!rule) throw new RecorderError('No such series', 404);
@@ -571,23 +719,27 @@ export function registerRecordings(router: any, deps: RecordingRouteDeps): void 
   }));
 
   router.delete('/LiveTv/SeriesTimers/:timerId', withRecorder(async (req, res, recorder) => {
-    const id = seriesNumberOf(req.params.timerId);
-    if (!id) throw new RecorderError('No such series', 404);
+    // A series by title, or a repeating schedule: given up the same way.
+    const slotId = slotNumberOf(req.params.timerId);
+    const kind: OwnedKind = slotId ? 'slot' : 'series';
+    const id = slotId ?? seriesNumberOf(req.params.timerId);
+    if (!id || (kind === 'slot' && !recorder.removeSlot)) throw new RecorderError('No such series', 404);
     // As a recording is given up (`giveUp`): let go by one of several owners, else removed by its
     // owner alone or its household's main profile.
     const store = recordingOwners();
-    const owners = store.owners('series', recorder.kind, id);
+    const owners = store.owners(kind, recorder.kind, id);
     const me = ownerOf(req);
     if (owners.includes(me) && owners.some((owner) => owner !== me) && flag(field(req, 'ForEveryone')) !== true) {
-      store.remove('series', recorder.kind, id, me);
+      store.remove(kind, recorder.kind, id, me);
       res.status(204).end();
       return;
     }
     if (!managesAll(req, owners)) {
       throw new RecorderError(owners.length ? 'Only who set it, or the main profile, can do that' : 'Only the main profile can do that', 403);
     }
-    await recorder.removeSeries(id);
-    store.forget('series', recorder.kind, id);
+    if (kind === 'slot') await recorder.removeSlot(id);
+    else await recorder.removeSeries(id);
+    store.forget(kind, recorder.kind, id);
     res.status(204).end();
   }));
 
@@ -602,7 +754,7 @@ export function registerRecordings(router: any, deps: RecordingRouteDeps): void 
       .filter((entry) => entry.state !== 'scheduled')
       .filter((entry) => inProgress === undefined || (entry.state === 'recording') === inProgress)
       .filter((entry) => !channelId || plain(deps.channelItemId(entry.channel)) === plain(channelId))
-      .filter((entry) => !seriesId || (entry.seriesId !== undefined && seriesTimerIdOf(entry.seriesId) === plain(seriesId)))
+      .filter((entry) => !seriesId || seriesTimerOf(entry) === plain(seriesId))
       .sort((a, b) => b.start - a.start);
     const page = entries.slice(startIndex, limit > 0 ? startIndex + limit : undefined);
     res.json(deps.itemList(page.map((entry) => recordingDto(deps, req, recorder, entry)), entries.length, startIndex));

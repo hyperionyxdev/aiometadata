@@ -51,6 +51,8 @@ export interface RecordingEntry {
   state: RecordingState;
   /** The series rule that set it, if one did. */
   seriesId?: number;
+  /** The repeating schedule (a time slot on chosen weekdays) that set it, if one did. */
+  slotId?: number;
   /** There is something to play: finished, or begun and playable as it records. */
   playable: boolean;
   /** Bytes recorded so far, where known. */
@@ -83,6 +85,8 @@ export interface RecordAsk {
   /** A window set by hand (epoch ms), used without a programme: no padding. */
   start?: number;
   end?: number;
+  /** What a window set by hand is called, where the recorder keeps a name for it. */
+  name?: string;
   /** The configuration asking (its UUID), kept with the recording. */
   owner?: string;
 }
@@ -94,6 +98,47 @@ export interface SeriesAsk {
   anyChannel: boolean;
   newOnly: boolean;
   /** The configuration asking (its UUID), kept with the rule and the recordings it sets. */
+  owner?: string;
+}
+
+/**
+ * A time slot recorded on chosen weekdays, from one date to another: Dispatcharr's recurring rules.
+ * Its days, times and dates are in the recorder's own time zone, as it keeps them.
+ */
+export interface SlotEntry {
+  id: number;
+  /** Its own name, or the channel's where it has none. */
+  name: string;
+  channel: ChannelRef;
+  /** Weekdays, 0 for Monday to 6 for Sunday. */
+  days: number[];
+  /** Times of day, "HH:MM:SS"; an end before the start is on the next day. */
+  start: string;
+  end: string;
+  /** The first and last days a recording may start on ("YYYY-MM-DD"); null for no bound. */
+  from: string | null;
+  until: string | null;
+  /** The time zone its days, times and dates are in (an IANA name). */
+  timeZone: string;
+  /** The next time it records that hasn't ended (epoch ms), or null when none is left. */
+  next: { start: number; end: number } | null;
+  /** The last time it records, or null where it has no end; shown when none is left. */
+  last: { start: number; end: number } | null;
+}
+
+export interface SlotAsk {
+  channel: ChannelRef;
+  name: string;
+  /** The first recording's window (epoch ms), padding already in it. */
+  start: number;
+  end: number;
+  /** Weekdays in the asker's time zone, 0 for Monday to 6 for Sunday. */
+  days: number[];
+  /** The asker's time zone (an IANA name); its days and `until` are read in it. */
+  timeZone?: string;
+  /** The last day a recording may start on, in the asker's time zone ("YYYY-MM-DD"). */
+  until?: string;
+  /** The configuration asking (its UUID). */
   owner?: string;
 }
 
@@ -139,4 +184,9 @@ export interface Recorder {
   close(): Promise<void>;
   /** The ad breaks marked in a finished recording, where the recorder marks them; none otherwise. */
   adBreaks?(id: number): Promise<AdBreak[]>;
+  /** Repeating schedules, where the recorder makes them (Dispatcharr's DVR): those it has. */
+  slots?(): Promise<SlotEntry[]>;
+  addSlot?(ask: SlotAsk): Promise<SlotEntry>;
+  /** The schedule gone, and the recordings it set that haven't started. */
+  removeSlot?(id: number): Promise<void>;
 }

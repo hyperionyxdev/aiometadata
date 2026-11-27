@@ -716,19 +716,23 @@ export class LocalRecorder implements Recorder {
 
   async record(ask: RecordAsk): Promise<RecordingEntry> {
     const channel = checkChannel(ask?.channel);
-    const programme = ask.programme ? checkProgramme(ask.programme) : undefined;
+    let programme = ask.programme ? checkProgramme(ask.programme) : undefined;
     const now = this.deps.now();
     let start: number;
     let end: number;
     if (programme) {
+      // A window set by hand with another name starting then too isn't the programme.
       const twin = this.state.recordings.find((e) => (e.state === 'scheduled' || e.state === 'recording')
-        && e.programme && sameChannel(e.channel, channel) && e.programme.start === programme.start);
+        && e.programme && sameChannel(e.channel, channel) && e.programme.start === programme.start && sameTitle(e.programme.title, programme.title));
       if (twin) return publicEntry(twin);
       ({ start, end } = this.paddedWindow(programme));
     } else {
       if (!Number.isFinite(ask.start) || !Number.isFinite(ask.end)) throw new RecorderError('A programme, or a start and an end, is needed');
       start = ask.start as number;
       end = ask.end as number;
+      // Named, the name is kept as its programme's title, over the window itself: no padding.
+      const name = typeof ask.name === 'string' ? ask.name.trim() : '';
+      if (name && end > start) programme = { title: name, start, end };
     }
     if (end <= start) throw new RecorderError('A recording has to end after it starts');
     if (end <= now) throw new RecorderError('That time is already over');

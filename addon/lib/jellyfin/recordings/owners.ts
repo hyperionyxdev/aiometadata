@@ -6,20 +6,24 @@ import consola from 'consola';
 
 const logger = consola.withTag('JellyfinRecordings');
 
-export type OwnedKind = 'recording' | 'series';
+/** A recording, a series (a programme's title), or a repeating schedule (a time slot on weekdays). */
+export type OwnedKind = 'recording' | 'series' | 'slot';
 
 interface Stored {
   recordings: Record<string, string[]>;
   series: Record<string, string[]>;
+  /** Missing from a file kept before repeating schedules were: none are owned. */
+  slots: Record<string, string[]>;
 }
 
 /**
- * Who set each recording and series: the profiles that asked for it (`<configuration>` for a
- * configuration's main profile, `<configuration>/<profile>` for another), by the recorder's own id.
- * Two profiles asking for the same programme share the one recording; it's gone once neither wants
- * it. Kept in a file beside the server's data (`addon/data`, on a volume in the usual setup), as
- * neither recorder keeps who asked: Dispatcharr's has no profiles, and the server's own keeps one.
- * One set before this was kept, or in Dispatcharr's own web app, has no owner: the household's.
+ * Who set each recording, series and repeating schedule: the profiles that asked for it
+ * (`<configuration>` for a configuration's main profile, `<configuration>/<profile>` for another),
+ * by the recorder's own id. Two profiles asking for the same programme share the one recording;
+ * it's gone once neither wants it. Kept in a file beside the server's data (`addon/data`, on a
+ * volume in the usual setup), as neither recorder keeps who asked: Dispatcharr's has no profiles,
+ * and the server's own keeps one. One set before this was kept, or in Dispatcharr's own web app,
+ * has no owner: the household's.
  */
 export class RecordingOwners {
   private data: Stored | null = null;
@@ -28,10 +32,10 @@ export class RecordingOwners {
 
   private read(): Stored {
     if (this.data) return this.data;
-    let stored: Stored = { recordings: {}, series: {} };
+    let stored: Stored = { recordings: {}, series: {}, slots: {} };
     try {
       const parsed = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-      stored = { recordings: { ...(parsed?.recordings ?? {}) }, series: { ...(parsed?.series ?? {}) } };
+      stored = { recordings: { ...(parsed?.recordings ?? {}) }, series: { ...(parsed?.series ?? {}) }, slots: { ...(parsed?.slots ?? {}) } };
     } catch (error: any) {
       if (error?.code !== 'ENOENT') logger.warn(`Who set each recording couldn't be read; starting afresh: ${error?.message || error}`);
     }
@@ -52,7 +56,9 @@ export class RecordingOwners {
   }
 
   private table(kind: OwnedKind): Record<string, string[]> {
-    return kind === 'recording' ? this.read().recordings : this.read().series;
+    const data = this.read();
+    if (kind === 'recording') return data.recordings;
+    return kind === 'series' ? data.series : data.slots;
   }
 
   private static key(recorder: string, id: number): string {
