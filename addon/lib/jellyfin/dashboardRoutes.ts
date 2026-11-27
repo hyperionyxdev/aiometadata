@@ -19,6 +19,27 @@ export function registerJellyfinDashboardRoutes(addon: any, deps: any): void {
     }
   });
 
+  // The sports check for the administrator, over every configuration with Live TV: no id to look up.
+  // Ahead of the routes that take a configuration's id in this place.
+  addon.get("/api/dashboard/jellyfin/sports-check", requireDashboardAdmin, async (req, res) => {
+    try {
+      const checks: any[] = [];
+      for (const userUUID of ((await database.getAllUserUUIDs().catch(() => [])) as string[]).slice(0, 50)) {
+        const config = await database.getUserConfig(userUUID).catch(() => null);
+        const check = config ? await require('./index').checkSports(config) : null;
+        if (check) checks.push({ configuration: userUUID, ...check });
+      }
+      if (!checks.length) {
+        res.status(404).json({ error: 'No configuration has Live TV' });
+        return;
+      }
+      res.json(checks.length === 1 ? checks[0] : { configurations: checks });
+    } catch (error) {
+      consola.error('[Dashboard API] Error:', error);
+      res.status(500).json({ error: 'Failed to check the guide against the day\'s games' });
+    }
+  });
+
   addon.get("/api/dashboard/jellyfin/search", requireDashboardAdmin, async (req, res) => {
     try {
       res.json(await require('./dashboard').dashboardSearch(String(req.query.q ?? '')));

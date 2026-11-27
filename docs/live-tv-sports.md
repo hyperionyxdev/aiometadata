@@ -70,14 +70,16 @@ last games found are used while newer ones are read, so it never waits on ESPN.
 
 ## The check
 
-Open, signed in to the dashboard as its administrator (or with the configuration's own page open
-with every profile):
+Open, signed in to the dashboard as its administrator:
 
 ```
-https://<this server>/api/dashboard/jellyfin/<configuration UUID>/sports-check
+https://<this server>/api/dashboard/jellyfin/sports-check
 ```
 
-The configuration UUID is the one in the server address the apps use (`/jellyfin/<UUID>`). It reads
+It checks every configuration with Live TV (one answer, or `configurations` with one per
+configuration). One configuration alone, with its own page open with every profile:
+`/api/dashboard/jellyfin/<configuration UUID>/sports-check`, the UUID being the one in the server
+address the apps use (`/jellyfin/<UUID>`). It reads
 the games from 6 hours ago to 30 hours ahead, and the whole guide over that time, and answers with:
 
 - `leagues`: per league, its games and how many were found on at least one channel.
