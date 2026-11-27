@@ -172,11 +172,17 @@ export class TeamNames {
   }
 }
 
-/** The games a text names both teams of. */
+/**
+ * The games a text names both teams of; a fight card also by its own name ("UFC 334 Prelims",
+ * "UFC Fight Night", "PFL Lyon"), as a guide often names its prelims.
+ */
 export function gamesNamed(text: string, games: Game[], names: TeamNames): Game[] {
   const teams = names.teamsIn(text);
-  if (teams.size < 2) return [];
-  return games.filter((game) => teams.has(teamKey(game, game.home)) && teams.has(teamKey(game, game.away)));
+  const both = (game: Game) => teams.has(teamKey(game, game.home)) && teams.has(teamKey(game, game.away));
+  if (!games.some((game) => game.kind === 'card')) return teams.size < 2 ? [] : games.filter(both);
+  const words = ` ${wordsOf(text).join(' ')} `;
+  const titled = (game: Game) => Boolean(game.title) && words.includes(` ${wordsOf(game.title!).join(' ')} `);
+  return games.filter((game) => both(game) || (game.kind === 'card' && titled(game)));
 }
 
 /**
@@ -185,7 +191,12 @@ export function gamesNamed(text: string, games: Game[], names: TeamNames): Game[
  * some guides for Mexico's channels are), and runs at least half an hour into it. A preview that
  * ends as the game begins isn't it, nor is a replay hours later.
  */
-export function showsGame(programme: { start: number; end: number }, game: Pick<Game, 'start'>): boolean {
+export function showsGame(programme: { start: number; end: number }, game: Pick<Game, 'start'> & Partial<Pick<Game, 'kind' | 'end'>>): boolean {
+  // A fight card runs for hours, its prelims first and its main card after: any part of it.
+  if (game.kind === 'card') {
+    const end = Math.max(game.end ?? game.start, game.start + 3 * 60 * MINUTE);
+    return programme.start >= game.start - 75 * MINUTE && programme.start < end && programme.end >= game.start + 30 * MINUTE;
+  }
   return programme.start >= game.start - 75 * MINUTE && programme.start <= game.start + 90 * MINUTE && programme.end >= game.start + 30 * MINUTE;
 }
 

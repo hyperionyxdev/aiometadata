@@ -31,7 +31,14 @@ featured games), `nfl`, `ncaaf` (college football), `nhl`, `mlb`, `mls`, `nwsl`,
 League), `efl` (EFL Championship), `facup`, `laliga`, `bundesliga`, `seriea`, `ligue1`, `ligamx`,
 `ligaexp` (Liga de Expansión MX), `ligamxf` (Liga MX Femenil), `copamx`, `concacaf` (Concacaf Champions
 Cup), `leaguescup`, `concacafw` (Concacaf W Championship), `wgoldcup` (Concacaf W Gold Cup), `ucl`
-(Champions League) and `uel` (Europa League).
+(Champions League), `uel` (Europa League), and the fight cards of `ufc` and `pfl`.
+
+A fight card is one game: its main event's fighters are its two sides, and `bouts` lists every fight
+in the order ESPN gives (prelims first), each with its weight class, start, state, fighters (a flag as
+the logo, record, winner), and once over its `method` ("KO/TKO", "Submission", "Decision"), `round`
+and `time`. While it's on, its `detail` names the fight under way and how many are left. It's found by
+its own name ("UFC 334 Prelims", "UFC Fight Night") or both main-event fighters, from just before its
+prelims to the end of its main card. ESPN has no boxing.
 
 ## How games are matched to channels
 

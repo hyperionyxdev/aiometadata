@@ -9,7 +9,7 @@ export interface League {
   path: string;
   /** How it's shown. */
   name: string;
-  sport: 'basketball' | 'football' | 'hockey' | 'baseball' | 'soccer';
+  sport: 'basketball' | 'football' | 'hockey' | 'baseball' | 'soccer' | 'mma';
   /** More of the scoreboard's query: college basketball lists a few featured games unless asked for all of Division I. */
   query?: string;
 }
@@ -43,6 +43,9 @@ export const LEAGUES: League[] = [
   { key: 'wgoldcup', path: 'soccer/concacaf.w.gold', name: 'Concacaf W Gold Cup', sport: 'soccer' },
   { key: 'ucl', path: 'soccer/uefa.champions', name: 'Champions League', sport: 'soccer' },
   { key: 'uel', path: 'soccer/uefa.europa', name: 'Europa League', sport: 'soccer' },
+  // Fight cards: the card is the game, its main event's fighters its two sides (espn.ts).
+  { key: 'ufc', path: 'mma/ufc', name: 'UFC', sport: 'mma' },
+  { key: 'pfl', path: 'mma/pfl', name: 'PFL', sport: 'mma' },
 ];
 
 export const leagueByKey = (key: string): League | undefined => LEAGUES.find((league) => league.key === key);

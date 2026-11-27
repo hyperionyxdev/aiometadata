@@ -405,3 +405,63 @@ test("a logo comes from ESPN's image host only, and is kept", async () => {
   assert.deepEqual(fetched, ['https://a.espncdn.com/i/teamlogos/nba/500/ny.png'], 'a logo fetched again while kept');
   assert.equal(await teamLogo('nba', 'nobody', espn, fetcher), null);
 });
+
+// A fight card as ESPN lists it: bouts with athletes, the main event last, results once over.
+const fighter = (id: string, name: string, short: string, order: number, winner = false) => ({
+  id, order, winner, athlete: { displayName: name, shortName: short, flag: { href: `https://a.espncdn.com/i/teamlogos/countries/500/${id}.png` } },
+  records: [{ type: 'total', summary: '20-5-0' }],
+});
+const bout = (at: number, state: string, weight: string, a: any, b: any, extra: any = {}) => ({
+  date: iso(at), endDate: iso(at + 30 * MINUTE), type: { abbreviation: weight }, competitors: [a, b],
+  status: { period: state === 'pre' ? 0 : extra.round ?? 1, displayClock: state === 'pre' ? '-' : extra.time ?? '2:10', type: { state } },
+  details: extra.method ? [{ type: { text: 'Results' } }, { type: { text: `Unofficial Winner ${extra.method}` } }] : [],
+  broadcasts: [{ names: ['Streaming'] }],
+  venue: { fullName: 'Arena', address: { city: 'Riyadh', country: 'Saudi Arabia' } },
+});
+const cardDay = (state: string) => ({ events: [{
+  id: '600', date: iso(now), name: 'UFC Fight Night: Adesanya vs Magomedov', shortName: 'Adesanya vs Magomedov',
+  status: { type: { state, shortDetail: state === 'post' ? 'Final' : 'Scheduled', completed: state === 'post' } },
+  competitions: [
+    bout(now, 'post', 'Bantamweight', fighter('a1', 'Prelim One', 'P. One', 1, true), fighter('a2', 'Prelim Two', 'P. Two', 2), { method: 'KO/TKO', round: 2, time: '3:15' }),
+    bout(now + 3 * HOUR, state === 'post' ? 'post' : 'in', 'Welterweight', fighter('b1', 'Yaroslav Amosov', 'Y. Amosov', 1), fighter('b2', 'Ian Machado Garry', 'I. Machado Garry', 2, true), { round: 2 }),
+    bout(now + 4 * HOUR, state === 'post' ? 'post' : 'pre', 'Middleweight', fighter('c1', 'Israel Adesanya', 'I. Adesanya', 1), fighter('c2', 'Shara Magomedov', 'S. Magomedov', 2)),
+  ],
+}] });
+
+test('a fight card is read as one game: its main event the two sides, its fights in order, results once over', () => {
+  const [card] = gamesOf(cardDay('in'), leagueByKey('ufc')!);
+  assert.equal(card.kind, 'card');
+  assert.equal(card.title, 'UFC Fight Night');
+  assert.equal(card.away.name, 'Israel Adesanya');
+  assert.equal(card.home.name, 'Shara Magomedov');
+  assert.equal(card.away.nickname, 'Adesanya');
+  assert.equal(card.bouts?.length, 3);
+  assert.deepEqual(card.bouts?.map((b) => b.main ?? false), [false, false, true]);
+  assert.equal(card.bouts?.[0].method, 'KO/TKO');
+  assert.equal(card.bouts?.[0].round, 2);
+  assert.equal(card.bouts?.[0].a.winner, true);
+  assert.equal(card.bouts?.[1].b.nickname, 'Machado Garry');
+  assert.equal(card.detail, 'Amosov vs Machado Garry · R2 · 1 to go');
+  // The fight over ended at its end; the main card, still to come, runs up to three hours.
+  assert.equal(card.end, now + 7 * HOUR);
+  assert.equal(card.city, 'Riyadh, Saudi Arabia');
+  assert.equal(keepFor([card], now), 30 * 1000);
+  const shown = gameInfo(card, 'game');
+  assert.equal(shown.kind, 'card');
+  assert.equal(shown.bouts[2].a.logo, '/AIOStreams/Sports/Logo/ufc/c1');
+  assert.equal(shown.bouts[0].method, 'KO/TKO');
+});
+
+test("a card is found by its name or its main event's fighters, over its prelims and its main card", () => {
+  const games = gamesOf(cardDay('pre'), leagueByKey('ufc')!);
+  const names = new TeamNames(games);
+  const named = (text: string) => gamesNamed(text, games, names).map((g) => g.id);
+  assert.deepEqual(named('UFC Fight Night: Adesanya vs. Magomedov'), ['ufc:600']);
+  assert.deepEqual(named('UFC Fight Night Prelims'), ['ufc:600']);
+  assert.deepEqual(named('Adesanya v Magomedov'), ['ufc:600']);
+  assert.deepEqual(named('UFC Embedded'), []);
+  const card = games[0];
+  assert.equal(showsGame({ start: now, end: now + 3 * HOUR }, card), true, 'the prelims');
+  assert.equal(showsGame({ start: now + 3 * HOUR, end: now + 6 * HOUR }, card), true, 'the main card');
+  assert.equal(showsGame({ start: now + 26 * HOUR, end: now + 29 * HOUR }, card), false, 'a replay the next day');
+});

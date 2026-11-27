@@ -60,6 +60,24 @@ export interface Team {
   home: boolean;
 }
 
+/** One fight on a card. */
+export interface Bout {
+  /** "Middleweight", "W Featherweight". */
+  weight?: string;
+  start: number;
+  state: GameState;
+  /** The card's main event. */
+  main?: boolean;
+  /** The first-named fighter and the second, as Team (a fighter's flag as the logo). */
+  a: Team;
+  b: Team;
+  /** Once it's over: "KO/TKO", "Submission", "Decision". */
+  method?: string;
+  /** The round it ended in, or is in, and the time in it. */
+  round?: number;
+  time?: string;
+}
+
 export interface Game {
   /** ESPN's event id, with the league's key: "nba:401810123". */
   id: string;
@@ -87,6 +105,13 @@ export interface Game {
   broadcasts: string[];
   /** "NBA Cup - Group Play". */
   note?: string;
+  /** A fight card: its main event's fighters are `away` and `home`, and its fights are `bouts`. */
+  kind?: 'card';
+  /** A card's name before its main event: "UFC 334", "UFC Fight Night", "PFL Lyon". */
+  title?: string;
+  bouts?: Bout[];
+  /** When a card's last fight is due to end. */
+  end?: number;
 }
 
 const text = (value: unknown, max = 200): string | undefined => {
@@ -135,9 +160,116 @@ function teamOf(competitor: any, started: boolean): Team | null {
   return parsed;
 }
 
+function fighterOf(competitor: any): Team | null {
+  const athlete = competitor?.athlete;
+  const id = text(competitor?.id, 40) ?? text(athlete?.id, 40);
+  const name = text(athlete?.displayName) ?? text(athlete?.fullName);
+  if (!id || !name) return null;
+  const short = text(athlete.shortName) ?? name;
+  // "I. Machado Garry": the surname, as a guide names a fight ("Adesanya vs. Magomedov").
+  const surname = short.replace(/^(?:\S\.\s*)+/, '').trim();
+  const records: any[] = Array.isArray(competitor.records) ? competitor.records : [];
+  const fighter: Team = { id, name, short, home: false };
+  if (surname && surname !== name) fighter.nickname = surname;
+  const flag = https(athlete.flag?.href);
+  if (flag) fighter.logo = flag;
+  const record = text((records.find((r) => r?.type === 'total') ?? records[0])?.summary, 20);
+  if (record) fighter.record = record;
+  if (competitor.winner === true) fighter.winner = true;
+  return fighter;
+}
+
+const stateOf = (status: any): GameState => (status?.type?.state === 'in' || status?.type?.state === 'post' ? status.type.state : 'pre');
+
+/** A fight card: its bouts in the order listed (prelims first), the main event the one its name names. */
+function cardOf(event: any, league: League): Game | null {
+  const id = text(event?.id, 40);
+  const competitions: any[] = Array.isArray(event?.competitions) ? event.competitions : [];
+  const name = text(event?.name);
+  const start = Date.parse(event?.date ?? competitions[0]?.date ?? '');
+  if (!id || !name || !competitions.length || !Number.isFinite(start)) return null;
+  const bouts: Bout[] = [];
+  let end = start;
+  for (const competition of competitions) {
+    const fighters = (Array.isArray(competition?.competitors) ? competition.competitors : [])
+      .slice()
+      .sort((x: any, y: any) => (Number(x?.order) || 0) - (Number(y?.order) || 0))
+      .map(fighterOf)
+      .filter((f: Team | null): f is Team => f !== null);
+    if (fighters.length !== 2) continue;
+    const boutStart = Date.parse(competition.date ?? '') || start;
+    const state = stateOf(competition.status);
+    const bout: Bout = { start: boutStart, state, a: fighters[0], b: fighters[1] };
+    const weight = text(competition.type?.abbreviation, 40);
+    if (weight) bout.weight = weight;
+    const round = Number(competition.status?.period);
+    if (state !== 'pre' && Number.isInteger(round) && round > 0) bout.round = round;
+    const time = text(competition.status?.displayClock, 10);
+    if (state !== 'pre' && time && time !== '-') bout.time = time;
+    const won = (Array.isArray(competition.details) ? competition.details : [])
+      .map((d: any) => text(d?.type?.text, 60))
+      .find((t: string | undefined) => t && /winner/i.test(t));
+    if (state === 'post' && won) bout.method = won.replace(/^.*winner\s*/i, '').trim() || undefined;
+    if (!bout.method) delete bout.method;
+    bouts.push(bout);
+    // A fight over ends when it ended; one to come is listed at its part of the card's start (prelims,
+    // main card), which runs for up to three hours.
+    const boutEnd = Date.parse(competition.endDate ?? '');
+    end = Math.max(end, state === 'post' && Number.isFinite(boutEnd) ? boutEnd : boutStart + 3 * 60 * 60 * 1000);
+  }
+  if (!bouts.length) return null;
+  const words = (t: string) => t.toLowerCase();
+  const main = bouts.find((b) => [b.a, b.b].every((f) => words(name).includes(words(f.nickname ?? f.name)))) ?? bouts[bouts.length - 1];
+  main.main = true;
+  const status = event.status ?? {};
+  const state = stateOf(status);
+  const now = bouts.find((b) => b.state === 'in');
+  const left = bouts.filter((b) => b.state === 'pre').length;
+  const detail = state === 'in' && now
+    ? `${now.a.nickname ?? now.a.short} vs ${now.b.nickname ?? now.b.short}${now.round ? ` · R${now.round}` : ''}${left ? ` · ${left} to go` : ''}`
+    : text(status.type?.shortDetail) ?? '';
+  const venue = competitions.find((c) => c?.venue)?.venue;
+  const broadcasts = new Set<string>();
+  for (const competition of competitions) {
+    for (const broadcast of Array.isArray(competition?.broadcasts) ? competition.broadcasts : []) {
+      for (const shown of Array.isArray(broadcast?.names) ? broadcast.names : []) if (text(shown, 60)) broadcasts.add(text(shown, 60)!);
+    }
+  }
+  const card: Game = {
+    id: `${league.key}:${id}`,
+    league: league.key,
+    leagueName: league.name,
+    name,
+    shortName: text(event.shortName, 60) ?? name,
+    start,
+    state,
+    detail,
+    completed: status.type?.completed === true,
+    off: /POSTPONED|CANCELED|CANCELLED/.test(String(status.type?.name ?? '').toUpperCase()),
+    away: main.a,
+    home: { ...main.b, home: true },
+    broadcasts: [...broadcasts].slice(0, 10),
+    kind: 'card',
+    title: name.includes(':') ? name.slice(0, name.indexOf(':')).trim() : name.replace(/\s+vs\.?\s+.*$/i, '').trim(),
+    bouts,
+    end,
+  };
+  if (venue?.fullName) card.venue = text(venue.fullName);
+  const city = [text(venue?.address?.city), text(venue?.address?.state ?? venue?.address?.country)].filter(Boolean).join(', ');
+  if (city) card.city = city;
+  return card;
+}
+
 /** One league's scoreboard, as games; whatever can't be read is left out. */
 export function gamesOf(body: any, league: League): Game[] {
   const games: Game[] = [];
+  if (league.sport === 'mma') {
+    for (const event of Array.isArray(body?.events) ? body.events : []) {
+      const card = cardOf(event, league);
+      if (card) games.push(card);
+    }
+    return games.sort((a, b) => a.start - b.start);
+  }
   for (const event of Array.isArray(body?.events) ? body.events : []) {
     const competition = Array.isArray(event?.competitions) ? event.competitions[0] : undefined;
     const id = text(event?.id, 40);
@@ -211,7 +343,7 @@ export function espnDays(from: number, to: number): string[] {
 
 /** How long a league's day may be kept, by what its games are doing. */
 export function keepFor(games: Game[], now: number): number {
-  if (games.some((g) => g.state === 'in')) return LIVE_TTL_MS;
+  if (games.some((g) => g.state === 'in' || g.bouts?.some((b) => b.state === 'in'))) return LIVE_TTL_MS;
   if (games.some((g) => g.state === 'pre' && !g.off && g.start - now < SOON_MS && now - g.start < 6 * HOUR)) return SOON_TTL_MS;
   if (games.length && games.every((g) => g.state === 'post' || g.off)) return DONE_TTL_MS;
   return DAY_TTL_MS;
@@ -278,7 +410,10 @@ export class Scoreboard {
       const body = await response.text();
       if (body.length > MAX_BYTES) return { games: [], failed: 'too large' };
       const games = gamesOf(JSON.parse(body), league);
-      for (const game of games) for (const team of [game.home, game.away]) if (team.logo) this.logos.set(`${league.key}|${team.id}`, team.logo);
+      for (const game of games) {
+        const sides = [game.home, game.away, ...(game.bouts ?? []).flatMap((bout) => [bout.a, bout.b])];
+        for (const team of sides) if (team.logo) this.logos.set(`${league.key}|${team.id}`, team.logo);
+      }
       return { games };
     } catch (error: any) {
       const why = error?.name === 'TimeoutError' ? 'timed out' : error instanceof SyntaxError ? 'not JSON' : 'unreachable';
