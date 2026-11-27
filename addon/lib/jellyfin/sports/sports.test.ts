@@ -12,6 +12,10 @@ import { espnDay, espnDays, gamesOf, keepFor, Scoreboard, type Game } from './es
 import { leagueByKey } from './leagues';
 import { gameOfChannel, gamesNamed, looksLikeGame, namesOf, showsGame, TeamNames, wordsOf } from './match';
 import { sportsCheck } from './check';
+import { channelsByGame, GameFinder, gameInfo, ranked } from './guide';
+import { forgetGames, gameTagger, teamLogo } from './serve';
+import { sportsLeagues, sportsOn } from './settings';
+import { programItem } from '../livetv/items';
 import type { ListedChannel } from '../livetv/lineup';
 import type { Programme } from '../livetv/programmes';
 
@@ -248,4 +252,107 @@ test('the check matches games to channels, by a programme or by the channel, and
   assert.deepEqual(nbaRow, { league: 'NBA', games: 3, withChannels: 2 });
   assert.equal(check.channels, 6);
   assert.equal(check.channelsWithGuide, 5);
+});
+
+const listed = (id: string, name: string, number?: string): ListedChannel => ({ meta: { type: 'tv', id, name }, ...(number ? { number } : {}) });
+const shown = (title: string, start: number, end: number, extra: Partial<Programme> = {}): Programme => ({ id: `${title}-${start}`, title, start, end, ...extra });
+
+test("a channel made for a game carries it all through: its build-up, the game and its wrap-up", () => {
+  const finder = new GameFinder(allGames(), now);
+  const game = listed('game', '4K | NBA | 76ers v Pacers | 4:30 PM PST', '901');
+  const start = now + 3.5 * HOUR;
+  const part = (programme: Programme) => finder.showing(game, programme)?.part;
+  assert.equal(part(shown('Coming up: NBA Basketball today at 4:30 PM PST', now - HOUR, start)), 'before');
+  assert.equal(part(shown('Philadelphia 76ers at Indiana Pacers', start, start + 3 * HOUR, { live: true })), 'game');
+  assert.equal(part(shown('NBA Basketball: Final', start + 3 * HOUR, start + 6 * HOUR)), 'after');
+  assert.equal(part(shown('Off air', start + 30 * HOUR, start + 32 * HOUR)), undefined, 'a day and more from its game');
+  // Any other channel: the game only, by its name and times.
+  const national = listed('national', 'National Sports', '101');
+  assert.equal(finder.showing(national, shown('NBA Basketball', now + 2 * HOUR, now + 4.5 * HOUR, { episodeTitle: 'Heat at Knicks' }))?.game.id, 'nba:1');
+  assert.equal(finder.showing(national, shown('NBA Countdown', now + 1.5 * HOUR, now + 2 * HOUR)), undefined);
+});
+
+test("a game's channels, best first: its own channel in 4K, its own, a live programme, the rest", () => {
+  const finder = new GameFinder(allGames(), now);
+  const start = now + 3.5 * HOUR;
+  const channels = [
+    listed('replay', 'Sports Extra', '50'),
+    listed('regional', 'Sports Philly', '102'),
+    listed('hd', 'NBA | 76ers v Pacers', '902'),
+    listed('uhd', '4K | NBA | 76ers v Pacers', '901'),
+  ];
+  const guide = new Map<string, Programme[]>([
+    ['tv|replay', [shown('76ers at Pacers', start, start + 3 * HOUR)]],
+    ['tv|regional', [shown('76ers at Pacers', start - 30 * MINUTE, start + 3 * HOUR, { live: true })]],
+    ['tv|uhd', [shown('Philadelphia 76ers at Indiana Pacers', start, start + 3 * HOUR, { live: true })]],
+  ]);
+  const order = ranked(channelsByGame(finder, channels, guide).get('nba:2') ?? []).map((c) => c.channel.number);
+  assert.deepEqual(order, ['901', '902', '102', '50']);
+});
+
+test("a game as the apps get it: logos through this server, scores once begun", () => {
+  const live = gameInfo(gamesOfNba().find((g) => g.state === 'in')!, 'game');
+  assert.equal(live.part, 'game');
+  assert.equal(live.home.score, '54');
+  assert.equal(live.home.logo, '/AIOStreams/Sports/Logo/nba/12');
+  assert.equal(live.clock, '4:12');
+  assert.equal(JSON.stringify(live).includes('logos.example'), false, "ESPN's own address sent to the apps");
+  const upcoming = gameInfo(gamesOfNba().find((g) => g.id === 'nba:1')!);
+  assert.equal(upcoming.part, undefined);
+  assert.equal(upcoming.home.score, undefined);
+  assert.equal(upcoming.start, iso(now + 2 * HOUR).replace('Z', ':00.000Z'));
+});
+
+test('a programme showing a game is sent with it', () => {
+  const deps: any = { encodeProgramId: () => 'programme-id', encodeId: () => 'channel-id', rememberImages: () => {}, imageTag: () => 'tag' };
+  const game = gameInfo(gamesOfNba()[0], 'game');
+  const item = programItem(deps, 'server', listed('national', 'National Sports'), shown('NBA Basketball', now, now + HOUR), { game });
+  assert.deepEqual(item.aiostreams?.game, game);
+  const plain = programItem(deps, 'server', listed('national', 'National Sports'), shown('News', now, now + HOUR));
+  assert.equal(plain.aiostreams, undefined);
+});
+
+test('sports can be turned off, and narrowed to some leagues', async () => {
+  const saved = { on: process.env.JELLYFIN_SPORTS, leagues: process.env.JELLYFIN_SPORTS_LEAGUES };
+  try {
+    delete process.env.JELLYFIN_SPORTS;
+    delete process.env.JELLYFIN_SPORTS_LEAGUES;
+    assert.equal(sportsOn(), true);
+    assert.equal(sportsLeagues().length > 20, true);
+    process.env.JELLYFIN_SPORTS_LEAGUES = 'nba, ligamx';
+    assert.deepEqual(sportsLeagues().map((l) => l.key), ['nba', 'ligamx']);
+    process.env.JELLYFIN_SPORTS = 'off';
+    assert.equal(sportsOn(), false);
+    forgetGames();
+    assert.equal(await gameTagger(new Scoreboard({ base, now: () => now })), undefined, 'games found with sports off');
+  } finally {
+    for (const [name, value] of [['JELLYFIN_SPORTS', saved.on], ['JELLYFIN_SPORTS_LEAGUES', saved.leagues]] as const) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    forgetGames();
+  }
+});
+
+test("a logo comes from ESPN's image host only, and is kept", async () => {
+  const board = new Scoreboard({ base, now: () => now });
+  await board.games(now - HOUR, now + 6 * HOUR, [nba]);
+  let fetched: string[] = [];
+  const fetcher: any = async (url: string) => {
+    fetched.push(url);
+    return new Response(new Uint8Array([1, 2, 3]), { headers: { 'content-type': 'image/png' } });
+  };
+  // The test games' logos are on another host: refused.
+  assert.equal(await teamLogo('nba', '18', board, fetcher), null);
+  assert.deepEqual(fetched, []);
+  const espn = new Scoreboard({ now: () => now, fetch: (async () => new Response(JSON.stringify({ events: [
+    event('1', now + 2 * HOUR, 'pre', { ...knicks, logo: 'https://a.espncdn.com/i/teamlogos/nba/500/ny.png' }, heat),
+  ] }), { headers: { 'content-type': 'application/json' } })) as any });
+  await espn.games(now - HOUR, now + 6 * HOUR, [nba]);
+  const logo = await teamLogo('nba', '18', espn, fetcher);
+  assert.equal(logo?.type, 'image/png');
+  assert.deepEqual([...logo!.bytes], [1, 2, 3]);
+  await teamLogo('nba', '18', espn, fetcher);
+  assert.deepEqual(fetched, ['https://a.espncdn.com/i/teamlogos/nba/500/ny.png'], 'a logo fetched again while kept');
+  assert.equal(await teamLogo('nba', 'nobody', espn, fetcher), null);
 });

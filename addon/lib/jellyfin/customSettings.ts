@@ -3,9 +3,9 @@
 import type { SettingDefinition } from '../settingsRegistry';
 
 /**
- * This fork's own settings (Live TV read straight from Dispatcharr, and recording), shown in the
+ * This fork's own settings (Live TV read straight from Dispatcharr, recording, and sports), shown in the
  * dashboard in sections of their own, each label marked "Custom". The dashboard puts what is saved
- * there into the environment, which `dispatcharr/settings.ts` and `recordings/settings.ts` read each
+ * there into the environment, which `dispatcharr/settings.ts`, `recordings/settings.ts` and `sports/settings.ts` read each
  * time they are used, so a change applies without a restart.
  *
  * The logins are left out: `JELLYFIN_DISPATCHARR_API_KEY`, `_USERNAME`, `_PASSWORD`, `_XC_USERNAME`
@@ -17,6 +17,7 @@ import type { SettingDefinition } from '../settingsRegistry';
  */
 const DISPATCHARR = 'Custom: Dispatcharr Live TV';
 const RECORDING = 'Custom: Live TV Recording';
+const SPORTS = 'Custom: Live TV Sports';
 
 export const CUSTOM_SETTINGS: SettingDefinition[] = [
   {
@@ -208,5 +209,26 @@ export const CUSTOM_SETTINGS: SettingDefinition[] = [
     default: 4,
     min: 1,
     max: 50,
+  },
+  {
+    key: 'JELLYFIN_SPORTS',
+    envVar: 'JELLYFIN_SPORTS',
+    label: 'Custom · Live TV Sports',
+    description:
+      "Games in the Live TV guide get their teams, score and details from ESPN's public scoreboard, and the apps can list the day's games with the channels showing them. Each request to ESPN names only a league and a date. Off: no requests, and the apps show the guide as it is.",
+    category: SPORTS,
+    type: 'boolean',
+    default: true,
+  },
+  {
+    key: 'JELLYFIN_SPORTS_LEAGUES',
+    envVar: 'JELLYFIN_SPORTS_LEAGUES',
+    label: 'Custom · Live TV Sports Leagues',
+    description:
+      'The leagues read, by their keys in docs/live-tv-sports.md (nba, nfl, ncaaf, epl, ligamx…). Empty: all of them.',
+    category: SPORTS,
+    type: 'string',
+    default: '',
+    uiHint: 'tags',
   },
 ];

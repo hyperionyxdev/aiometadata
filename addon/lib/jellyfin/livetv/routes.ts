@@ -7,6 +7,7 @@ import { airingAt, caughtUp, filterProgrammes, guideRange, programmesFor, progra
 import { channelItem, channelParts, programItem, type ChannelParts, type ItemDeps } from './items';
 import { GONE, guideChannels, listChannels, listGroup, placementFor, placementsFor, unlisted, type ListedChannel } from './lineup';
 import { unnamedChannels } from './limits';
+import type { Programme } from './programmes';
 import { askOf, field, flag, integer, listOf, timeOf, type Ask } from './query';
 
 export { field, flag };
@@ -33,7 +34,12 @@ export interface LiveTvDeps extends GateDeps, ItemDeps {
   profileKey(config: any): string;
   /** The title of the library's show under this id, or null. */
   seriesTitle(req: any, id: string): Promise<string | null>;
+  /** What a programme showing a game is sent with (sports/serve.ts); none without sports. */
+  games?(): Promise<GameTag | undefined>;
 }
+
+/** The game a programme shows, as it's sent on it; undefined for any other. */
+export type GameTag = (channel: ListedChannel, programme: Programme) => any | undefined;
 
 export interface Answer {
   status: number;
@@ -77,15 +83,20 @@ export async function channelItems(
 ): Promise<any[]> {
   const serverId = deps.serverIdFor(userOf(req));
   const now = deps.now();
-  const airing = withProgram && channels.length
-    ? await programmesFor(deps.addon, live.base, live.reach, channels.map((c) => c.meta), now, now + 1, { waitMs: ON_NOW_WAIT_MS })
-    : new Map();
-  return channels.map((channel) =>
-    channelItem(deps, serverId, channel, {
-      airing: airingAt(airing.get(channelKeyOf(channel.meta)), now),
+  const [airing, tag] = withProgram && channels.length
+    ? await Promise.all([
+      programmesFor(deps.addon, live.base, live.reach, channels.map((c) => c.meta), now, now + 1, { waitMs: ON_NOW_WAIT_MS }),
+      deps.games?.(),
+    ])
+    : [new Map<string, Programme[]>(), undefined];
+  return channels.map((channel) => {
+    const programme = airingAt(airing.get(channelKeyOf(channel.meta)), now);
+    return channelItem(deps, serverId, channel, {
+      airing: programme,
       favourite: favourites.has(channelKeyOf(channel.meta)),
-    })
-  );
+      game: programme && tag ? tag(channel, programme) : undefined,
+    });
+  });
 }
 
 async function listSkipping(deps: LiveTvDeps, live: LiveTv, skip: Set<string>, start: number, count: number): Promise<{ channels: ListedChannel[]; total: number; skipped: number }> {
@@ -203,13 +214,13 @@ export async function programmesAround(deps: LiveTvDeps, live: LiveTv, channels:
   return items;
 }
 
-export function programItems(deps: LiveTvDeps, req: any, items: GuideItem[], now: number, opened = false): any[] {
+export function programItems(deps: LiveTvDeps, req: any, items: GuideItem[], now: number, opened = false, tag?: GameTag): any[] {
   const serverId = deps.serverIdFor(userOf(req));
   const known = new Map<ListedChannel, ChannelParts>();
   return items.map(({ channel, programme }) => {
     let parts = known.get(channel);
     if (!parts) known.set(channel, (parts = channelParts(deps, serverId, channel)));
-    return programItem(deps, serverId, channel, programme, { opened, catchup: caughtUp(channel.meta, programme.start, now), parts });
+    return programItem(deps, serverId, channel, programme, { opened, catchup: caughtUp(channel.meta, programme.start, now), parts, game: tag?.(channel, programme) });
   });
 }
 
@@ -222,17 +233,18 @@ async function programmePage(deps: LiveTvDeps, req: any, live: LiveTv, ask: Ask)
   const title = seriesId ? await deps.seriesTitle(req, String(seriesId)) : undefined;
   if (title === null || ask('SeriesTimerId')) return deps.itemList([], 0, startIndex);
   const channels = await programmeChannels(deps, live, ask);
+  const tagging = deps.games?.();
   let around = await programmesAround(deps, live, channels, ask, now);
   if (title !== undefined) around = around.filter(({ programme }) => sameTitle(programme.title, title));
   const { items, total } = filterProgrammes(around, ask, now);
-  return deps.itemList(programItems(deps, req, items, now), total, startIndex);
+  return deps.itemList(programItems(deps, req, items, now, false, await tagging), total, startIndex);
 }
 
 export async function programmeById(deps: LiveTvDeps, req: any, live: LiveTv, descriptor: any): Promise<Answer> {
   if (descriptor?.k !== 'program') return NOT_FOUND;
   const target = await programmeTarget(deps.addon, live.base, live.reach, descriptor);
   if (!target?.programme) return NOT_FOUND;
-  const [item] = programItems(deps, req, [{ channel: target.channel, programme: target.programme }], deps.now(), true);
+  const [item] = programItems(deps, req, [{ channel: target.channel, programme: target.programme }], deps.now(), true, await deps.games?.());
   return { status: 200, body: item };
 }
 

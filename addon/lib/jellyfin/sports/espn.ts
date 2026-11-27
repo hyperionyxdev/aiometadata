@@ -237,6 +237,8 @@ export interface GamesRead {
 export class Scoreboard {
   private readonly held = new LRUCache<string, Held>({ max: 2000, ttl: DAY_TTL_MS });
   private readonly reading = new Map<string, Promise<Held>>();
+  /** Each team's logo, by league and team, as last read. */
+  private readonly logos = new LRUCache<string, string>({ max: 5000 });
   private readonly base: string;
   private readonly fetcher: typeof fetch;
   private readonly now: () => number;
@@ -275,12 +277,19 @@ export class Scoreboard {
       if (Number.isFinite(length) && length > MAX_BYTES) return { games: [], failed: 'too large' };
       const body = await response.text();
       if (body.length > MAX_BYTES) return { games: [], failed: 'too large' };
-      return { games: gamesOf(JSON.parse(body), league) };
+      const games = gamesOf(JSON.parse(body), league);
+      for (const game of games) for (const team of [game.home, game.away]) if (team.logo) this.logos.set(`${league.key}|${team.id}`, team.logo);
+      return { games };
     } catch (error: any) {
       const why = error?.name === 'TimeoutError' ? 'timed out' : error instanceof SyntaxError ? 'not JSON' : 'unreachable';
       logger.warn(`${league.name} scoreboard for ${day}: ${why}`);
       return { games: [], failed: why };
     }
+  }
+
+  /** A team's logo, as its league's scoreboard last gave it. */
+  logoOf(league: string, team: string): string | undefined {
+    return this.logos.get(`${league}|${team}`);
   }
 
   /** Every game starting in a span, of these leagues, soonest first. */

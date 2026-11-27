@@ -1,9 +1,16 @@
 # Live TV sports
 
 Games, scores and team details for the channels in a configuration's Live TV guide, read from
-ESPN's public scoreboard. This first part reads the scoreboard and matches its games to the guide,
-and reports how well that matching does, so it can be checked on a real guide before any app shows
-it.
+ESPN's public scoreboard and matched to the guide by this server. The apps get them on the guide's
+programmes and in a list of the day's games; a check in the dashboard shows how well the matching
+does on a real guide.
+
+## Settings
+
+In the dashboard's "Custom: Live TV Sports" section, or the environment:
+
+- `JELLYFIN_SPORTS`: on by default. Off: nothing is asked of ESPN and the guide is sent as it is.
+- `JELLYFIN_SPORTS_LEAGUES`: the leagues read, by key (below); empty for all.
 
 ## What is sent out
 
@@ -18,10 +25,11 @@ league that can't be read is reported as failed.
 
 ## Leagues
 
-`addon/lib/jellyfin/sports/leagues.ts`: NBA, WNBA, men's and women's college basketball, NFL,
-college football, NHL, MLB, MLS, NWSL, the Premier League, EFL Championship, FA Cup, LaLiga,
-Bundesliga, Serie A, Ligue 1, Liga MX, Liga de Expansión MX, Liga MX Femenil, Copa MX, the
-Concacaf Champions Cup, the Leagues Cup, the Champions League and the Europa League.
+`addon/lib/jellyfin/sports/leagues.ts`, by key: `nba`, `wnba`, `ncaam` and `ncaaw` (men's and women's
+college basketball), `nfl`, `ncaaf` (college football), `nhl`, `mlb`, `mls`, `nwsl`, `epl` (Premier
+League), `efl` (EFL Championship), `facup`, `laliga`, `bundesliga`, `seriea`, `ligue1`, `ligamx`,
+`ligaexp` (Liga de Expansión MX), `ligamxf` (Liga MX Femenil), `copamx`, `concacaf` (Concacaf Champions
+Cup), `leaguescup`, `ucl` (Champions League) and `uel` (Europa League).
 
 ## How games are matched to channels
 
@@ -36,6 +44,29 @@ and every team playing that day is known, so a name isn't taken for a team it's 
   starts, or a replay later on, isn't the game.
 - **By a channel:** a channel made for a game ("4K | NBA | 76ers v Pacers | 4:30 PM PST") names it in
   its own name. Where its name fits several games (a series), it's the one under way, else the next.
+
+- **Around a game on its own channel:** the channel's build-up before the game ("Coming up…") and its
+  wrap-up after ("Final") are that game's too, within a day of it.
+
+## What the apps get
+
+- **On a programme** (`/LiveTv/Programs`, a programme by id, a channel's programme on now):
+  `aiostreams.game`, the game it shows, with `part`: `game` for the game itself, `before` and `after`
+  for a game channel's build-up and wrap-up. The game has its `id`, `league` and `leagueName`, `name`,
+  `start`, `state` (`pre`, `in` or `post`), `detail` ("Q3 4:12", "Final"), `period` and `clock` while
+  it's on, `off` when put off or called off, `venue`, `city`, `broadcasts`, `note`, and `home` and
+  `away` teams with `name`, `short`, `abbreviation`, `logo`, `color`, `alternateColor`, `record`,
+  `rank`, and `score` and `winner` once begun.
+- **The day's games**, `GET /AIOStreams/Games` (signed in): from 6 hours ago to 30 hours ahead, or
+  `From` and `To`, and one league by `League`. Each game as above, with `channels`, best first: a
+  channel made for the game (4K first), then a programme marked live, then the rest, in channel number
+  order. Each channel has its `Id`, `Name`, `Number`, `ChannelPrimaryImageTag` and `by`, and, where the
+  guide has the game on it, `ProgramId`, `StartDate`, `EndDate` and `IsLive`. Kept 20 seconds.
+- **Team logos**, `GET /AIOStreams/Sports/Logo/{league}/{team}` (the `logo` path): fetched by this
+  server from ESPN's image host only, and kept a week, so the apps never ask ESPN.
+
+The guide waits at most a second and a half for games the first time they're read; after that, the
+last games found are used while newer ones are read, so it never waits on ESPN.
 
 ## The check
 

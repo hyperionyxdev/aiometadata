@@ -72,7 +72,7 @@ export function channelItem(
   deps: ItemDeps,
   serverId: string,
   channel: ListedChannel,
-  { airing, favourite }: { airing?: Programme; favourite: boolean }
+  { airing, favourite, game }: { airing?: Programme; favourite: boolean; game?: any }
 ): any {
   const parts = channelParts(deps, serverId, channel);
   const { id, imageTag } = parts;
@@ -95,7 +95,7 @@ export function channelItem(
     item.Number = channel.number;
   }
   if (channel.meta.groups?.length) item.Genres = channel.meta.groups;
-  if (airing) item.CurrentProgram = programItem(deps, serverId, channel, airing, { parts });
+  if (airing) item.CurrentProgram = programItem(deps, serverId, channel, airing, { parts, game });
   return item;
 }
 
@@ -104,7 +104,12 @@ export function programItem(
   serverId: string,
   channel: ListedChannel,
   programme: Programme,
-  { opened = false, catchup = false, parts = channelParts(deps, serverId, channel) }: { opened?: boolean; catchup?: boolean; parts?: ChannelParts } = {}
+  {
+    opened = false,
+    catchup = false,
+    parts = channelParts(deps, serverId, channel),
+    game,
+  }: { opened?: boolean; catchup?: boolean; parts?: ChannelParts; game?: any } = {}
 ): any {
   const id = deps.encodeProgramId({ t: channel.meta.type, i: channel.meta.id, at: Math.floor(programme.start / 1000) }, parts.id);
   const item: any = {
@@ -146,6 +151,8 @@ export function programItem(
     ...(catchup && { catchup: true }),
     ...(programme.placeholder && { placeholder: true }),
     ...(programme.finale && { finale: true }),
+    // The game it shows, or leads up to or follows on a channel made for it (sports/guide.ts).
+    ...(game && { game }),
   };
   if (Object.keys(extras).length) item.aiostreams = extras;
   // The still in lists too (a guide's blocks, what's on now); the backdrop where it's opened.

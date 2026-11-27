@@ -4,7 +4,8 @@ import type { ListedChannel } from '../livetv/lineup';
 import type { Programme } from '../livetv/programmes';
 import { LEAGUES } from './leagues';
 import type { Game, Scoreboard } from './espn';
-import { gameOfChannel, gamesNamed, looksLikeGame, showsGame, TeamNames } from './match';
+import { channelsByGame, GameFinder } from './guide';
+import { looksLikeGame } from './match';
 
 const HOUR = 60 * 60 * 1000;
 const BEHIND_MS = 6 * HOUR;
@@ -66,36 +67,31 @@ export async function sportsCheck(source: CheckSource, board: Scoreboard, now: n
   const [read, channels] = await Promise.all([board.games(from, to), source.channels()]);
   const games = read.games;
   const guide = await source.programmes(channels, from - 2 * HOUR, to + 4 * HOUR);
-  const names = new TeamNames(games);
+  const finder = new GameFinder(games, now);
+  const byGame = channelsByGame(finder, channels, guide);
+  const numberOf = (channel: ListedChannel) => channel.number ?? channel.meta.channelNumber;
+  const found = new Map<string, CheckedChannel[]>([...byGame].map(([id, list]) => [id, list.map(({ channel, by, programme }) => {
+    const number = numberOf(channel);
+    return { channel: channel.meta.name, ...(number ? { number } : {}), by, ...(by === 'programme' && programme ? { programme: textOf(programme) } : {}) };
+  })]));
 
-  const found = new Map<string, CheckedChannel[]>();
-  const add = (game: Game, entry: CheckedChannel) => {
-    const list = found.get(game.id) ?? [];
-    if (!list.some((c) => c.channel === entry.channel && c.number === entry.number)) list.push(entry);
-    found.set(game.id, list);
-  };
   const unmatchedProgrammes: SportsCheck['unmatchedProgrammes'] = [];
   const unmatchedChannels: SportsCheck['unmatchedChannels'] = [];
   let programmes = 0;
-
   for (const channel of channels) {
     const own = guide.get(keyOf(channel)) ?? [];
     programmes += own.length;
-    const number = channel.number ?? channel.meta.channelNumber;
-    const shown = (entry: Omit<CheckedChannel, 'channel' | 'number'>): CheckedChannel => ({ channel: channel.meta.name, ...(number ? { number } : {}), ...entry });
-    const byName = gameOfChannel(gamesNamed(channel.meta.name, games, names), now);
-    if (byName) add(byName, shown({ by: 'channel' }));
-    else if (looksLikeGame(channel.meta.name) && unmatchedChannels.length < MAX_LISTED) {
+    const number = numberOf(channel);
+    const named = finder.channelGame(channel);
+    if (!named && looksLikeGame(channel.meta.name) && unmatchedChannels.length < MAX_LISTED) {
       unmatchedChannels.push({ channel: channel.meta.name, ...(number ? { number } : {}) });
     }
+    if (named) continue;
     for (const programme of own) {
       const text = textOf(programme);
-      const shows = gamesNamed(text, games, names).filter((game) => showsGame(programme, game));
-      for (const game of shows) add(game, shown({ by: 'programme', programme: text }));
-      if (!shows.length && !byName && programme.start >= from && programme.start <= to && sporty(programme) && looksLikeGame(text)
-        && unmatchedProgrammes.length < MAX_LISTED) {
-        unmatchedProgrammes.push({ channel: channel.meta.name, ...(number ? { number } : {}), programme: text, start: iso(programme.start) });
-      }
+      if (programme.start < from || programme.start > to || !sporty(programme) || !looksLikeGame(text)) continue;
+      if (finder.programmeGames(programme).length || unmatchedProgrammes.length >= MAX_LISTED) continue;
+      unmatchedProgrammes.push({ channel: channel.meta.name, ...(number ? { number } : {}), programme: text, start: iso(programme.start) });
     }
   }
 

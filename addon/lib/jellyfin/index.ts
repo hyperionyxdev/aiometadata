@@ -86,6 +86,7 @@ import { asDefault, createLivePins, liveSourceIds, pickLive, pinScope, sourcesNa
 import { GONE, guideChannels, placementFor } from './livetv/lineup';
 import { programmesFor } from './livetv/guide';
 import { checkSportsFor } from './sports/live';
+import { gameTagger, registerSports } from './sports/serve';
 import { unnamedChannels } from './livetv/limits';
 import { dispatcharrFor, dispatcharrLive, type DispatcharrLive } from './dispatcharr';
 import { DIRECT_BASE, withDispatcharr } from './dispatcharr/addon';
@@ -2375,6 +2376,7 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
       const meta = await fetchMeta(req.params.userUUID, 'series', descriptor.i).catch(() => null);
       return meta?.name || null;
     },
+    games: () => gameTagger(),
   };
 
   const outsideViewingHours = async (req: any): Promise<boolean> => {
@@ -4857,6 +4859,7 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
   registerSyncPlay(router, syncPlay);
   startSweep(syncPlay);
   registerLiveTv(router, liveTv);
+  registerSports(router, liveTv);
   // Ahead of the item route, which would take /Items/Suggestions for an item id.
   registerStubs(router);
   router.get(['/Items/:itemId', '/Users/:userId/Items/:itemId'], singleItemHandler);
