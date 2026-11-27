@@ -69,8 +69,24 @@ A series rule looks two days ahead each hour.
 
 `JELLYFIN_RECORDINGS_USERS` lists who may, as `JELLYFIN_DISPATCHARR_USERS` does (configuration
 UUIDs, profiles' Jellyfin user ids, or `<configuration UUID>/<profile id>`). Empty, everyone with
-Live TV may. Recordings are the server's, not a profile's: everyone who may record sees them all.
-A user who may record has `EnableLiveTvManagement` in their policy, which clients read to offer it.
+Live TV may. Everyone who may record sees every recording, and can play it. A user who may record
+has `EnableLiveTvManagement` in their policy, which clients read to offer it.
+
+## Whose recordings they are
+
+Each recording and series remembers the profiles that set it, in `addon/data/recording-owners.json`
+(beside the database, on the data volume in the usual setup): neither recorder keeps who asked.
+Two profiles recording the same programme share the one recording; a series' recordings are its
+owners'. Timers, recordings and series carry it for a client to read, in `aiostreams`:
+`owners` (the profiles' Jellyfin user ids), `mine` (the caller is one of them) and `manage` (the
+caller may stop, cancel or delete it for everyone).
+
+- One of several owners stopping, cancelling or deleting it only leaves it; it goes once nobody
+  wants it.
+- Who set it alone, or the main profile of its household, acts on it for everyone. The main profile,
+  one of several owners itself, does so with `ForEveryone=true`; otherwise it leaves it too.
+- Anyone else is turned down (403). One with no owner (set before this, or in Dispatcharr's own web
+  app) is the household's: any main profile may delete it.
 
 `JELLYFIN_RECORDINGS=off` turns recording off.
 

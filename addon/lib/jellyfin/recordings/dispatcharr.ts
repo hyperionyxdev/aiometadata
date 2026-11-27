@@ -207,12 +207,13 @@ export class DispatcharrRecorder implements Recorder {
     const programme = ask.programme;
     let body: any;
     if (programme) {
-      // Set already (here, in Dispatcharr's web app, or by a series rule): that one is the answer.
+      // Set already (here, in Dispatcharr's web app, or by a series rule) and still to come or under
+      // way: that one is the answer. One that failed, or is over, isn't: recorded afresh.
       const same = (await this.readRows(true)).find((row) => numberOf(row?.channel) === channel.id
         && timeOf(row?.custom_properties?.program?.start_time) === programme.start);
       if (same) {
         const entry = this.entryOf(same, lineup, await this.rules().catch(() => []));
-        if (entry) return entry;
+        if (entry && (entry.state === 'scheduled' || entry.state === 'recording')) return entry;
       }
       const guide = await this.live.guide.guideOf(channel, lineup).catch(() => null);
       // The programme as Dispatcharr's guide gives it to its own Record button, with its own times

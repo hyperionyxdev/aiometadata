@@ -212,6 +212,17 @@ test('setting a programme already set returns the one there', async () => {
   assert.equal(rows.length, 1);
 });
 
+test('setting a programme whose recording failed records it afresh', async () => {
+  const r = recorder();
+  const first = await r.record({ channel: news, programme: weather });
+  rows[0].custom_properties.status = 'interrupted';
+  rows[0].custom_properties.interrupted_reason = 'no_stream_data: 503';
+  const again = await r.record({ channel: news, programme: weather });
+  assert.notEqual(again.id, first.id, 'the failed one was handed back');
+  assert.equal(again.state, 'scheduled');
+  assert.equal(rows.length, 2);
+});
+
 test('a window by hand goes without a programme and without padding', async () => {
   const entry = await recorder().record({ channel: news, start: now + 10 * MIN, end: now + 20 * MIN });
   const post = seen.find((s) => s.method === 'POST' && s.path === '/api/channels/recordings/');

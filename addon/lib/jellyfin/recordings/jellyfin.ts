@@ -2,6 +2,8 @@
 // Copyright (C) 2026 cedya77 and AIOMetadata contributors, see NOTICE
 import consola from 'consola';
 import { Readable } from 'stream';
+import { profileUserId } from '../profiles';
+import { configurationOf, recordingOwners } from './owners';
 import { RecorderError, type ChannelRef, type MediaAnswer, type ProgrammeInfo, type Recorder, type RecordingEntry, type SeriesEntry } from './types';
 
 const logger = consola.withTag('JellyfinRecordings');
@@ -65,6 +67,68 @@ const flag = (value: unknown): boolean | undefined => {
   return String(value).toLowerCase() === 'true';
 };
 
+/** The caller is its configuration's main profile: it manages its household's recordings. */
+const isMain = (req: any): boolean => !req.jellyfin?.profileId;
+
+/** Who set a recording: those who asked for it, and those of the series that set it. */
+function ownersOfRecording(recorder: Recorder, entry: RecordingEntry): string[] {
+  const store = recordingOwners();
+  const own = store.owners('recording', recorder.kind, entry.id);
+  const bySeries = entry.seriesId !== undefined ? store.owners('series', recorder.kind, entry.seriesId) : [];
+  return [...new Set([...own, ...bySeries])];
+}
+
+/**
+ * Whether the caller may stop, cancel or delete one for everyone: who set it, alone, or the main
+ * profile of the household that set it (any main profile, for one with no owner: the household's).
+ */
+function managesAll(req: any, owners: string[]): boolean {
+  if (owners.length === 1 && owners[0] === ownerOf(req)) return true;
+  return isMain(req) && owners.every((owner) => configurationOf(owner) === userOf(req));
+}
+
+/**
+ * Who set it, as a client reads it: their Jellyfin user ids (for their pictures), whether the
+ * caller is one of them (its own recordings), and whether it may act on it for everyone.
+ */
+function ownershipOf(req: any, owners: string[]): { owners: string[]; mine: boolean; manage: boolean } {
+  return {
+    owners: owners.map((owner) => {
+      const [uuid, profile] = owner.split('/');
+      return profileUserId(uuid, profile || null);
+    }),
+    mine: owners.includes(ownerOf(req)),
+    manage: managesAll(req, owners),
+  };
+}
+
+/**
+ * Given up by the caller: only it let go where others want it too (one of its owners), else
+ * stopped, cancelled or deleted for everyone where the caller may (who set it alone, or its
+ * household's main profile; among other owners, the main profile only when it asks ForEveryone).
+ * Says whether it was let go or acted on.
+ */
+async function giveUp(req: any, recorder: Recorder, entry: RecordingEntry, how: 'cancel' | 'remove'): Promise<'left' | 'done'> {
+  const store = recordingOwners();
+  const owners = ownersOfRecording(recorder, entry);
+  const me = ownerOf(req);
+  const mine = owners.includes(me);
+  const others = owners.some((owner) => owner !== me);
+  if (mine && others && flag(field(req, 'ForEveryone')) !== true) {
+    store.remove('recording', recorder.kind, entry.id, me);
+    if (ownersOfRecording(recorder, entry).includes(me)) throw new RecorderError('A series you share sets it: cancel the series to stop it', 409);
+    return 'left';
+  }
+  if (!managesAll(req, owners)) {
+    throw new RecorderError(owners.length ? 'Only who set it, or the main profile, can do that' : 'Only the main profile can do that', 403);
+  }
+  if (how === 'cancel') await recorder.cancel(entry.id);
+  else await recorder.remove(entry.id);
+  // Taken off before it started, or deleted: so is who set it. Stopped, it's kept, and still theirs.
+  if (how === 'remove' || entry.state === 'scheduled') store.forget('recording', recorder.kind, entry.id);
+  return 'done';
+}
+
 /** Jellyfin's word for where a timer or recording is. */
 function statusOf(entry: RecordingEntry): string {
   switch (entry.state) {
@@ -122,7 +186,7 @@ function timerDto(deps: RecordingRouteDeps, req: any, recorder: Recorder, entry:
     KeepUntil: 'UntilDeleted',
     Status: statusOf(entry),
     RunTimeTicks: Math.round(((end - start) / 1000) * TICKS_PER_SECOND),
-    aiostreams: extrasOf(recorder, entry),
+    aiostreams: { ...extrasOf(recorder, entry), ...ownershipOf(req, ownersOfRecording(recorder, entry)) },
   };
   if (programId) {
     dto.ProgramId = programId;
@@ -155,6 +219,7 @@ function seriesDto(deps: RecordingRouteDeps, req: any, recorder: Recorder, rule:
     Days: [],
     DayPattern: 'Daily',
     ImageTags: {},
+    aiostreams: ownershipOf(req, recordingOwners().owners('series', recorder.kind, rule.id)),
   };
   if (rule.channel) {
     dto.ChannelId = deps.channelItemId(rule.channel);
@@ -191,7 +256,7 @@ function recordingDto(deps: RecordingRouteDeps, req: any, recorder: Recorder, en
     BackdropImageTags: [],
     UserData: { ...deps.emptyUserData, Key: id, ItemId: id },
     MediaSources: entry.playable ? [mediaSourceOf(recorder, entry)] : [],
-    aiostreams: extrasOf(recorder, entry),
+    aiostreams: { ...extrasOf(recorder, entry), ...ownershipOf(req, ownersOfRecording(recorder, entry)) },
   };
   if (entry.channel.number) item.ChannelNumber = entry.channel.number;
   if (entry.seriesId !== undefined) item.SeriesTimerId = seriesTimerIdOf(entry.seriesId);
@@ -443,6 +508,8 @@ export function registerRecordings(router: any, deps: RecordingRouteDeps): void 
       const end = Date.parse(String(field(req, 'EndDate') ?? ''));
       entry = await recorder.record({ channel, start, end, owner: ownerOf(req) });
     }
+    // Whoever asks is one of its owners, the one set by someone else for the same programme too.
+    recordingOwners().add('recording', recorder.kind, entry.id, ownerOf(req));
     logger.info(`A recording was set on ${recorder.kind === 'dispatcharr' ? "Dispatcharr's DVR" : 'this server'}`);
     // Jellyfin answers with nothing; the timer goes along for a client that reads it.
     res.status(200).json(timerDto(deps, req, recorder, entry));
@@ -462,8 +529,9 @@ export function registerRecordings(router: any, deps: RecordingRouteDeps): void 
 
   router.delete('/LiveTv/Timers/:timerId', withRecorder(async (req, res, recorder) => {
     const id = recordingNumberOf(req.params.timerId);
-    if (!id) throw new RecorderError('No such timer', 404);
-    await recorder.cancel(id);
+    const entry = id ? await recorder.get(id) : null;
+    if (!entry) throw new RecorderError('No such timer', 404);
+    await giveUp(req, recorder, entry, 'cancel');
     res.status(204).end();
   }));
 
@@ -485,6 +553,7 @@ export function registerRecordings(router: any, deps: RecordingRouteDeps): void 
       newOnly: flag(field(req, 'RecordNewOnly')) === true,
       owner: ownerOf(req),
     });
+    recordingOwners().add('series', recorder.kind, rule.id, ownerOf(req));
     logger.info(`A series was set to record on ${recorder.kind === 'dispatcharr' ? "Dispatcharr's DVR" : 'this server'}`);
     res.status(200).json(seriesDto(deps, req, recorder, rule, await recorder.padding()));
   }));
@@ -503,7 +572,21 @@ export function registerRecordings(router: any, deps: RecordingRouteDeps): void 
   router.delete('/LiveTv/SeriesTimers/:timerId', withRecorder(async (req, res, recorder) => {
     const id = seriesNumberOf(req.params.timerId);
     if (!id) throw new RecorderError('No such series', 404);
+    // As a recording is given up (`giveUp`): let go by one of several owners, else removed by its
+    // owner alone or its household's main profile.
+    const store = recordingOwners();
+    const owners = store.owners('series', recorder.kind, id);
+    const me = ownerOf(req);
+    if (owners.includes(me) && owners.some((owner) => owner !== me) && flag(field(req, 'ForEveryone')) !== true) {
+      store.remove('series', recorder.kind, id, me);
+      res.status(204).end();
+      return;
+    }
+    if (!managesAll(req, owners)) {
+      throw new RecorderError(owners.length ? 'Only who set it, or the main profile, can do that' : 'Only the main profile can do that', 403);
+    }
     await recorder.removeSeries(id);
+    store.forget('series', recorder.kind, id);
     res.status(204).end();
   }));
 
@@ -539,8 +622,10 @@ export function registerRecordings(router: any, deps: RecordingRouteDeps): void 
     res.json(recordingDto(deps, req, recorder, entry));
   }));
 
-  router.delete(['/LiveTv/Recordings/:recordingId', '/Items/:itemId'], oneRecording(async (_req, res, recorder, id) => {
-    await recorder.remove(id);
+  router.delete(['/LiveTv/Recordings/:recordingId', '/Items/:itemId'], oneRecording(async (req, res, recorder, id) => {
+    const entry = await recorder.get(id);
+    if (!entry) throw new RecorderError('No such recording', 404);
+    await giveUp(req, recorder, entry, 'remove');
     res.status(204).end();
   }));
 
