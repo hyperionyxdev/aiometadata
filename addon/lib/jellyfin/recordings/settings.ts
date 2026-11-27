@@ -53,10 +53,12 @@ function warnOnce(message: string): void {
 
 /** The settings from the environment; `dispatcharr` says whether Live TV comes from Dispatcharr here. */
 export function recordingSettings(dispatcharr: boolean): RecordingSettings {
-  const asked = readEnv('JELLYFIN_RECORDINGS')?.toLowerCase();
+  // `auto`, the dashboard's own choice for this, is the same as leaving it unset.
+  const raw = readEnv('JELLYFIN_RECORDINGS')?.toLowerCase();
+  const asked = raw === 'auto' ? undefined : raw;
   let mode: RecordingMode = dispatcharr ? 'dispatcharr' : 'off';
   if (asked === 'dispatcharr' || asked === 'local' || asked === 'off') mode = asked;
-  else if (asked !== undefined) warnOnce(`JELLYFIN_RECORDINGS must be dispatcharr, local or off; ${mode} is used`);
+  else if (asked !== undefined) warnOnce(`JELLYFIN_RECORDINGS must be auto, dispatcharr, local or off; ${mode} is used`);
   if (mode === 'dispatcharr' && !dispatcharr) {
     warnOnce('JELLYFIN_RECORDINGS=dispatcharr needs Live TV from Dispatcharr (JELLYFIN_DISPATCHARR_URL and a login); recording is off');
     mode = 'off';

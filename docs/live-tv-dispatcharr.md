@@ -46,6 +46,12 @@ Clients other than Hyperion are sent a channel as HLS, as on `live-tv`.
 
 ## Settings
 
+These can also be set in the dashboard, in its **Custom: Dispatcharr Live TV** section (each label
+marked "Custom"), and a change there applies without a restart. A value saved there wins over the
+environment until it's reset. The logins (`JELLYFIN_DISPATCHARR_API_KEY`, `_USERNAME`, `_PASSWORD`,
+`_XC_USERNAME`, `_XC_PASSWORD`) are in the environment only: the dashboard neither shows them nor
+keeps them. `JELLYFIN_DISPATCHARR_OUTPUT_FORMAT=default` is the same as leaving it empty.
+
 | Variable | |
 | --- | --- |
 | `JELLYFIN_DISPATCHARR_URL` | Required. Dispatcharr's address as this server reaches it, for example `http://dispatcharr:9191` on a shared Docker network. Reached directly, not through `HTTPS_PROXY`, and a private address needs no `OUTBOUND_ALLOWED_PRIVATE_HOSTS` entry. |

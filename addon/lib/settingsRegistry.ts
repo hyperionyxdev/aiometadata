@@ -6740,6 +6740,9 @@ export const CONDITIONAL_RULES: ConditionalRule[] = [
   },
 ];
 
+// This fork's own settings, in sections marked Custom (addon/lib/jellyfin/customSettings.ts).
+SETTINGS_REGISTRY.push(...(require('./jellyfin/customSettings').CUSTOM_SETTINGS as SettingDefinition[]));
+
 const registryMap = new Map<string, SettingDefinition>();
 for (const def of SETTINGS_REGISTRY) {
   registryMap.set(def.key, def);

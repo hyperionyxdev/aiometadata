@@ -91,9 +91,11 @@ export function dispatcharrSettings(): DispatcharrSettings | null {
     warnOnce('JELLYFIN_DISPATCHARR_URL is set without JELLYFIN_DISPATCHARR_API_KEY, or a username and password; Live TV comes from the stream addon');
     return null;
   }
-  const format = readEnv('JELLYFIN_DISPATCHARR_OUTPUT_FORMAT')?.toLowerCase();
+  // `default`, the dashboard's own choice for this, is the same as leaving it unset.
+  const chosen = readEnv('JELLYFIN_DISPATCHARR_OUTPUT_FORMAT')?.toLowerCase();
+  const format = chosen === 'default' ? undefined : chosen;
   if (format && !FORMATS.has(format)) {
-    warnOnce('JELLYFIN_DISPATCHARR_OUTPUT_FORMAT must be mpegts, hls or fmp4; Dispatcharr\'s own format is used');
+    warnOnce('JELLYFIN_DISPATCHARR_OUTPUT_FORMAT must be default, mpegts, hls or fmp4; Dispatcharr\'s own format is used');
   }
   const xcUser = readEnv('JELLYFIN_DISPATCHARR_XC_USERNAME');
   const xcPassword = readEnv('JELLYFIN_DISPATCHARR_XC_PASSWORD');

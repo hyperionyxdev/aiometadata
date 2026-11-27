@@ -41,6 +41,13 @@ A recording uses one of the provider's connections while it runs, as watching do
 channel already being watched shares that one. Dispatcharr turns no recording down for overlapping
 others: one with no free connection ends as interrupted ("The channel couldn't be played").
 
+## In the dashboard
+
+Every recording setting can also be set in the dashboard, in its **Custom: Live TV Recording**
+section (each label marked "Custom"), and a change there applies without a restart. A value saved
+there wins over the environment until it's reset. `JELLYFIN_RECORDINGS=auto` is the same as leaving
+it unset: Dispatcharr's DVR where Live TV comes from Dispatcharr, otherwise off.
+
 ## On this server (`JELLYFIN_RECORDINGS=local`)
 
 This server records the channel's stream itself, from any Live TV source (Dispatcharr or a stream
