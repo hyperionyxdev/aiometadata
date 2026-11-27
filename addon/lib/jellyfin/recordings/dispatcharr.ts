@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (C) 2026 cedya77 and AIOMetadata contributors, see NOTICE
 import { createHash } from 'crypto';
+import path from 'path';
 import { Readable } from 'stream';
 import type { DispatcharrLive } from '../dispatcharr';
 import { DispatcharrError } from '../dispatcharr/client';
@@ -17,6 +18,8 @@ import {
   type SeriesAsk,
   type SeriesEntry,
 } from './types';
+import { readAdMarks, type AdBreak } from './adMarks';
+import { dispatcharrRecordingsFolder } from './settings';
 
 // The recordings list is read at most this often: a guide page asks for its marks, and a timer
 // list for its rows, often together.
@@ -347,6 +350,23 @@ export class DispatcharrRecorder implements Recorder {
     // Dispatcharr's own Delete: the rule, and its recordings that haven't started.
     const answer = await this.change(`/api/channels/series-rules/?${query}`, 'DELETE');
     if (answer.status >= 300 && answer.status !== 404) throw new RecorderError(`Dispatcharr didn't delete the series: ${reasonOf(answer.text)}`, 502);
+  }
+
+  /**
+   * The ads Dispatcharr's commercial detection marked in a finished recording, in its Mark mode:
+   * the edit list it writes beside the file, read from where this server sees Dispatcharr's
+   * recordings folder. In its Cut mode the ads are gone from the file, and there's nothing to mark.
+   */
+  async adBreaks(id: number): Promise<AdBreak[]> {
+    const folder = dispatcharrRecordingsFolder();
+    if (!folder) return [];
+    const row = (await this.readRows()).find((r) => numberOf(r?.id) === id);
+    const props = row?.custom_properties && typeof row.custom_properties === 'object' ? row.custom_properties : {};
+    const detected = props.comskip && typeof props.comskip === 'object' ? props.comskip : null;
+    const file = textOf(props.file_path);
+    const list = path.posix.basename(textOf(detected?.edl));
+    if (!detected || detected.status !== 'completed' || detected.mode !== 'mark' || !file || !list) return [];
+    return readAdMarks(folder, path.posix.join(path.posix.dirname(file), list)) ?? [];
   }
 
   async open(id: number, { range, path }: { range?: string; path?: string }): Promise<MediaAnswer | null> {

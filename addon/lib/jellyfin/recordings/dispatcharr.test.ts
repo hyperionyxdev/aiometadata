@@ -6,7 +6,10 @@
 // How to run it: docs/live-tv-recordings.md, "Tests".
 import { after, before, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'fs';
 import http from 'http';
+import os from 'os';
+import path from 'path';
 import express from 'express';
 import { AddressInfo } from 'net';
 import { DispatcharrLive } from '../dispatcharr';
@@ -476,5 +479,51 @@ test('a refusal comes back with its own status and plain words', async () => {
     assert.equal((await call(`${server.url}/LiveTv/Timers`, { method: 'POST', body: { ProgramId: 'nope' } })).status, 404);
   } finally {
     server.close();
+  }
+});
+
+// ---------- Ads marked by Dispatcharr's commercial detection ----------
+
+test("the ads Dispatcharr marks in its Mark mode are a recording's commercial segments", async () => {
+  const saved = { ...process.env };
+  const shared = fs.mkdtempSync(path.join(os.tmpdir(), 'dispatcharr-recordings-'));
+  try {
+    fs.mkdirSync(path.join(shared, 'Weather'), { recursive: true });
+    fs.writeFileSync(path.join(shared, 'Weather', 'Weather S04E02.edl'), '0.00\t30.50\t0\n610.00\t790.00\t0\n');
+    const ended = { status: 'completed', file_path: '/data/recordings/Weather/Weather S04E02.mkv', file_url: '/api/channels/recordings/70/file/' };
+    const window = { channel: 7, start_time: iso(now - 120 * MIN), end_time: iso(now - 60 * MIN) };
+    rows.push({ id: 70, ...window, custom_properties: { ...ended, comskip: { status: 'completed', mode: 'mark', edl: 'Weather S04E02.edl', commercials: 2 } } });
+    // Cut: the ads are gone from the file; the list it left, if any, no longer fits it.
+    rows.push({ id: 71, ...window, custom_properties: { ...ended, comskip: { status: 'completed', edl: 'Weather S04E02.edl', segments_kept: 3, commercials: 2 } } });
+    rows.push({ id: 72, ...window, custom_properties: { ...ended } });
+    const r = recorder();
+    delete process.env.JELLYFIN_RECORDINGS_DISPATCHARR_DIR;
+    assert.deepEqual(await r.adBreaks(70), [], 'marks read with no folder shared');
+    process.env.JELLYFIN_RECORDINGS_DISPATCHARR_DIR = shared;
+    assert.deepEqual(await r.adBreaks(70), [{ start: 0, end: 30.5 }, { start: 610, end: 790 }]);
+    assert.deepEqual(await r.adBreaks(71), [], 'marks read for a recording whose ads were cut out');
+    assert.deepEqual(await r.adBreaks(72), [], 'marks read for a recording never checked for ads');
+
+    const server = await jellyfin(r);
+    try {
+      const answer = await call(`${server.url}/MediaSegments/${timerIdOf(70)}`);
+      assert.equal(answer.status, 200);
+      assert.deepEqual(answer.body.Items.map((s: any) => [s.Type, s.StartTicks, s.EndTicks]), [
+        ['Commercial', 0, 305_000_000],
+        ['Commercial', 6_100_000_000, 7_900_000_000],
+      ]);
+      assert.equal(answer.body.Items[0].ItemId, timerIdOf(70));
+      assert.match(answer.body.Items[0].Id, /^[0-9a-f]{32}$/);
+      assert.deepEqual((await call(`${server.url}/MediaSegments/${timerIdOf(70)}?includeSegmentTypes=Intro`)).body.Items, []);
+      assert.equal((await call(`${server.url}/MediaSegments/${timerIdOf(70)}?includeSegmentTypes=Intro,Commercial`)).body.Items.length, 2);
+      assert.deepEqual((await call(`${server.url}/MediaSegments/${timerIdOf(72)}`)).body.Items, []);
+      // Not a recording: the server's own segments answer.
+      assert.equal((await call(`${server.url}/MediaSegments/0123456789abcdef0123456789abcdef`)).body.Message, 'passed on');
+    } finally {
+      server.close();
+    }
+  } finally {
+    process.env = saved;
+    fs.rmSync(shared, { recursive: true, force: true });
   }
 });

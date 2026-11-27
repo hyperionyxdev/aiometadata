@@ -74,6 +74,15 @@ export function recordingSettings(dispatcharr: boolean): RecordingSettings {
   };
 }
 
+/**
+ * Where this server sees Dispatcharr's recordings folder (mounted read-only), for the ad marks
+ * Dispatcharr's commercial detection writes beside each recording in its Mark mode; unset, none
+ * are read. Read each time it's used, so a change applies at once.
+ */
+export function dispatcharrRecordingsFolder(): string | undefined {
+  return readEnv('JELLYFIN_RECORDINGS_DISPATCHARR_DIR');
+}
+
 /** Changes whenever a setting does. */
 export function recordingFingerprint(settings: RecordingSettings): string {
   return JSON.stringify(settings);

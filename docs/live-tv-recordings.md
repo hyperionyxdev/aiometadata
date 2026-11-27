@@ -90,10 +90,32 @@ caller may stop, cancel or delete it for everyone).
 
 `JELLYFIN_RECORDINGS=off` turns recording off.
 
+## Skipping ads
+
+Dispatcharr's commercial detection (Comskip, in its DVR settings) runs on each recording once it
+ends. In its **Cut** mode the ads are taken out of the file itself, and nothing more is needed. In
+its **Mark** mode the file stays as it was and Dispatcharr writes the ads' times in an edit list
+(`.edl`) beside it; a recording's ads are then answered here as Jellyfin's own commercial segments
+(`GET /MediaSegments/{recordingId}`, `Type: Commercial`), which a player offers to skip and marks on
+its seek bar as it does an intro.
+
+Dispatcharr has no call for that list, so this server reads it from disk:
+
+- Share Dispatcharr's recordings folder with this server's container, read-only (in its compose
+  file, under `volumes:`, the folder Dispatcharr's `/data/recordings` is on, mounted at
+  `/dispatcharr-recordings:ro`, say).
+- Set `JELLYFIN_RECORDINGS_DISPATCHARR_DIR` to where it's mounted (`/dispatcharr-recordings`), or
+  **Custom · Dispatcharr's Recordings Folder** in the dashboard.
+
+The list is found by the end of the path Dispatcharr gives for it, so the folder shared may be its
+recordings folder or one above it; nothing outside it is read. Only a recording Dispatcharr marked
+in Mark mode has ads: one whose ads were cut out, one never checked, and one still recording have
+none. A list that changes (the detection run again from Dispatcharr's web app) is read again.
+
 ## Tests
 
 ```sh
-for test in dispatcharr local; do
+for test in dispatcharr local owners adMarks; do
   node node_modules/.bin/ts-node --skip-project --transpile-only \
     --compiler-options '{"module":"commonjs","target":"es2022","esModuleInterop":true,"ignoreDeprecations":"6.0","allowJs":true}' \
     addon/lib/jellyfin/recordings/$test.test.ts
@@ -102,4 +124,5 @@ done
 
 The first runs Dispatcharr's DVR, and the Jellyfin routes over it, against a fake Dispatcharr that
 answers as Dispatcharr's code does. The second records from fake streams to a folder of its own.
-Both use invented channels and programmes.
+The third gives recordings to profiles and takes them back; the fourth reads edit lists from a
+folder of its own. All use invented channels and programmes.

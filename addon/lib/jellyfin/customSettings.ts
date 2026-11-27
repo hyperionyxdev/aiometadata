@@ -147,6 +147,16 @@ export const CUSTOM_SETTINGS: SettingDefinition[] = [
     uiHint: 'tags',
   },
   {
+    key: 'JELLYFIN_RECORDINGS_DISPATCHARR_DIR',
+    envVar: 'JELLYFIN_RECORDINGS_DISPATCHARR_DIR',
+    label: "Custom · Dispatcharr's Recordings Folder",
+    description:
+      "Dispatcharr's DVR only: where this server sees Dispatcharr's recordings folder, mounted read-only (/dispatcharr-recordings, say). With Dispatcharr's commercial detection on in Mark mode, the ads it marks in each recording are offered to skip. Empty: no ad marks.",
+    category: RECORDING,
+    type: 'string',
+    default: '',
+  },
+  {
     key: 'JELLYFIN_RECORDINGS_DIR',
     envVar: 'JELLYFIN_RECORDINGS_DIR',
     label: 'Custom · Recordings Folder',

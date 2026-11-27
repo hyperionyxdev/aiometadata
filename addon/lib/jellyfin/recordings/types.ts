@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (C) 2026 cedya77 and AIOMetadata contributors, see NOTICE
 import type { Readable } from 'stream';
+import type { AdBreak } from './adMarks';
 
 /**
  * Recording Live TV, done by one of two recorders behind the same calls: Dispatcharr's own DVR
@@ -136,4 +137,6 @@ export interface Recorder {
   open(id: number, options: { range?: string; path?: string }): Promise<MediaAnswer | null>;
   /** Stops anything running (timers, captures) on shutdown or when the settings change. */
   close(): Promise<void>;
+  /** The ad breaks marked in a finished recording, where the recorder marks them; none otherwise. */
+  adBreaks?(id: number): Promise<AdBreak[]>;
 }

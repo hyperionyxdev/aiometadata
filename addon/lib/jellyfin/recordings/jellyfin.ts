@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (C) 2026 cedya77 and AIOMetadata contributors, see NOTICE
+import { createHash } from 'crypto';
 import consola from 'consola';
 import { Readable } from 'stream';
 import { profileUserId } from '../profiles';
@@ -620,6 +621,23 @@ export function registerRecordings(router: any, deps: RecordingRouteDeps): void 
     const entry = await recorder.get(id);
     if (!entry) throw new RecorderError('No such recording', 404);
     res.json(recordingDto(deps, req, recorder, entry));
+  }));
+
+  // A recording's ads, where its recorder marks them, as Jellyfin's own commercial segments: a
+  // player's Skip button and seek bar take them as they take an intro. Any other item goes on to
+  // the server's own segments.
+  router.get('/MediaSegments/:itemId', oneRecording(async (req, res, recorder, id) => {
+    const wanted = String(field(req, 'includeSegmentTypes') ?? '').split(',').map((type) => type.trim()).filter(Boolean);
+    const breaks = wanted.length && !wanted.includes('Commercial') ? [] : ((await recorder.adBreaks?.(id).catch(() => [])) ?? []);
+    const itemId = timerIdOf(id);
+    const items = breaks.map((brk, index) => ({
+      Id: createHash('sha256').update(`${itemId}:Commercial:${index}`).digest('hex').slice(0, 32),
+      ItemId: itemId,
+      Type: 'Commercial',
+      StartTicks: Math.round(brk.start * TICKS_PER_SECOND),
+      EndTicks: Math.round(brk.end * TICKS_PER_SECOND),
+    }));
+    res.json(deps.itemList(items, items.length, 0));
   }));
 
   router.delete(['/LiveTv/Recordings/:recordingId', '/Items/:itemId'], oneRecording(async (req, res, recorder, id) => {
