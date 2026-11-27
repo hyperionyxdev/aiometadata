@@ -70,7 +70,9 @@ last games found are used while newer ones are read, so it never waits on ESPN.
 
 ## The check
 
-Open, signed in to the dashboard as its administrator:
+In the dashboard: Settings, "Custom: Live TV Sports", **Check the guide**. It shows each league's
+games and how many were found on a channel, what matched none, and every game with its channels, and
+**Copy the results** copies the summary as text. Behind it, for the administrator:
 
 ```
 https://<this server>/api/dashboard/jellyfin/sports-check

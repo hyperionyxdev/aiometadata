@@ -69,6 +69,7 @@ import {
   useImportSettings,
 } from "@/hooks/useDashboardQueries";
 import { RestartManager } from "./RestartManager";
+import { SPORTS_CATEGORY, SportsCheck } from "./SportsCheck";
 
 interface DashboardSettingsProps {
   data: { settings: SettingItem[]; canRestart?: boolean; bootId?: string } | null | undefined;
@@ -677,6 +678,7 @@ export function DashboardSettings({ data }: DashboardSettingsProps) {
               {grouped.get(cat)?.map((setting) => (
                 <SettingRow key={setting.key} setting={setting} />
               ))}
+              {cat === SPORTS_CATEGORY && <SportsCheck />}
             </CardContent>
           </Card>
         ))}
