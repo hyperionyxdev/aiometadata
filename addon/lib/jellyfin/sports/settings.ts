@@ -8,6 +8,8 @@ import { LEAGUES, type League } from './leagues';
  *
  * - `JELLYFIN_SPORTS`: on by default; off sends nothing to ESPN and adds nothing to the guide.
  * - `JELLYFIN_SPORTS_LEAGUES`: the leagues read, by key (leagues.ts); empty for all.
+ * - `JELLYFIN_SPORTS_BOXERBOOK_KEY`: a free Boxerbook API key for boxing; without one, boxing is read
+ *   less often, within what Boxerbook allows without a key.
  */
 function readEnv(name: string): string | undefined {
   const value = process.env[name];
@@ -17,6 +19,11 @@ function readEnv(name: string): string | undefined {
 export function sportsOn(): boolean {
   const value = readEnv('JELLYFIN_SPORTS')?.toLowerCase();
   return value === undefined || !['false', '0', 'no', 'off'].includes(value);
+}
+
+/** The Boxerbook API key boxing is read with, if one is set: this server's own, never sent to the apps. */
+export function boxerbookKey(): string | undefined {
+  return readEnv('JELLYFIN_SPORTS_BOXERBOOK_KEY');
 }
 
 export function sportsLeagues(): League[] {

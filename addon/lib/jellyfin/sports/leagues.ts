@@ -9,7 +9,9 @@ export interface League {
   path: string;
   /** How it's shown. */
   name: string;
-  sport: 'basketball' | 'football' | 'hockey' | 'baseball' | 'soccer' | 'mma';
+  sport: 'basketball' | 'football' | 'hockey' | 'baseball' | 'soccer' | 'mma' | 'boxing';
+  /** Where its games are read: ESPN's scoreboard, or for boxing, Boxerbook (boxing.ts). */
+  source?: 'boxerbook';
   /** More of the scoreboard's query: college basketball lists a few featured games unless asked for all of Division I. */
   query?: string;
 }
@@ -46,6 +48,8 @@ export const LEAGUES: League[] = [
   // Fight cards: the card is the game, its main event's fighters its two sides (espn.ts).
   { key: 'ufc', path: 'mma/ufc', name: 'UFC', sport: 'mma' },
   { key: 'pfl', path: 'mma/pfl', name: 'PFL', sport: 'mma' },
+  // ESPN has no boxing: its cards come from Boxerbook.
+  { key: 'boxing', path: '', name: 'Boxing', sport: 'boxing', source: 'boxerbook' },
 ];
 
 export const leagueByKey = (key: string): League | undefined => LEAGUES.find((league) => league.key === key);

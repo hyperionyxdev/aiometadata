@@ -2,7 +2,9 @@
 // Copyright (C) 2026 cedya77 and AIOMetadata contributors, see NOTICE
 import { LRUCache } from 'lru-cache';
 import consola from 'consola';
+import { BoxingSource } from './boxing';
 import { LEAGUES, type League } from './leagues';
+import { boxerbookKey } from './settings';
 
 const logger = consola.withTag('JellyfinSports');
 
@@ -64,6 +66,8 @@ export interface Team {
 export interface Bout {
   /** "Middleweight", "W Featherweight". */
   weight?: string;
+  /** What's at stake: "WBC heavyweight title". */
+  title?: string;
   start: number;
   state: GameState;
   /** The card's main event. */
@@ -112,6 +116,12 @@ export interface Game {
   bouts?: Bout[];
   /** When a card's last fight is due to end. */
   end?: number;
+  /** When a guide may list it, where that's wider than a game's usual times (a boxing card's). */
+  window?: { from: number; to: number };
+  /** Its day is known but not its time. */
+  untimed?: boolean;
+  /** Who its details are from, to be shown with them where the source asks for it. */
+  credit?: { text: string; url: string };
 }
 
 const text = (value: unknown, max = 200): string | undefined => {
@@ -358,6 +368,8 @@ export interface ScoreboardOptions {
   base?: string;
   fetch?: typeof fetch;
   now?: () => number;
+  /** Where boxing is read (boxing.ts). */
+  boxing?: BoxingSource;
 }
 
 export interface GamesRead {
@@ -374,11 +386,13 @@ export class Scoreboard {
   private readonly base: string;
   private readonly fetcher: typeof fetch;
   private readonly now: () => number;
+  private readonly boxing: BoxingSource;
 
   constructor(options: ScoreboardOptions = {}) {
     this.base = (options.base ?? ESPN_BASE).replace(/\/+$/, '');
     this.fetcher = options.fetch ?? fetch;
     this.now = options.now ?? Date.now;
+    this.boxing = options.boxing ?? new BoxingSource({ now: this.now, key: boxerbookKey });
   }
 
   /** A league's games filed under one ESPN day. */
@@ -430,7 +444,9 @@ export class Scoreboard {
   /** Every game starting in a span, of these leagues, soonest first. */
   async games(from: number, to: number, leagues: League[] = LEAGUES): Promise<GamesRead> {
     const days = espnDays(from, to);
-    const work = leagues.flatMap((league) => days.map((day) => ({ league, day })));
+    const boxing = leagues.filter((league) => league.source === 'boxerbook');
+    const fights = Promise.all(boxing.map(async (league) => ({ league, read: await this.boxing.games(league, from, to) })));
+    const work = leagues.filter((league) => !league.source).flatMap((league) => days.map((day) => ({ league, day })));
     const results: Array<{ league: League; held: Held }> = [];
     for (let n = 0; n < work.length; n += PARALLEL) {
       const batch = work.slice(n, n + PARALLEL);
@@ -441,6 +457,10 @@ export class Scoreboard {
     for (const { league, held } of results) {
       if (held.failed) failed.set(league.key, held.failed);
       for (const game of held.games) if (game.start >= from && game.start <= to) byId.set(game.id, game);
+    }
+    for (const { league, read } of await fights) {
+      if (read.failed) failed.set(league.key, read.failed);
+      for (const game of read.games) byId.set(game.id, game);
     }
     return {
       games: [...byId.values()].sort((a, b) => a.start - b.start || a.id.localeCompare(b.id)),

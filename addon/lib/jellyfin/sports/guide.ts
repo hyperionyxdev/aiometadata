@@ -137,13 +137,15 @@ export function gameInfo(game: Game, part?: GamePart): any {
     away: teamInfo(game, game.away),
   };
   if (part) info.part = part;
+  if (game.credit) info.credit = game.credit;
+  if (game.untimed) info.untimed = true;
   if (game.kind === 'card') {
     info.kind = 'card';
     if (game.title) info.title = game.title;
     if (game.end) info.end = new Date(game.end).toISOString();
     info.bouts = (game.bouts ?? []).map((bout) => {
       const shown: any = { start: new Date(bout.start).toISOString(), state: bout.state, a: teamInfo(game, bout.a), b: teamInfo(game, bout.b) };
-      for (const key of ['weight', 'main', 'method', 'round', 'time'] as const) if (bout[key] !== undefined) shown[key] = bout[key];
+      for (const key of ['weight', 'title', 'main', 'method', 'round', 'time'] as const) if (bout[key] !== undefined) shown[key] = bout[key];
       return shown;
     });
   }

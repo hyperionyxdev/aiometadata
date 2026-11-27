@@ -10,7 +10,8 @@ import type { SettingDefinition } from '../settingsRegistry';
  *
  * The logins are left out: `JELLYFIN_DISPATCHARR_API_KEY`, `_USERNAME`, `_PASSWORD`, `_XC_USERNAME`
  * and `_XC_PASSWORD` stay in the environment only, so the dashboard neither shows them nor keeps
- * them in its database.
+ * them in its database. The Boxerbook key is in, marked sensitive, so it's set there and kept on this
+ * server: the dashboard masks it and leaves it out of exports, as it does the other API keys.
  *
  * Kept in this file, and added to the registry with one line, so a merge of upstream's registry
  * rarely meets these.
@@ -230,5 +231,16 @@ export const CUSTOM_SETTINGS: SettingDefinition[] = [
     type: 'string',
     default: '',
     uiHint: 'tags',
+  },
+  {
+    key: 'JELLYFIN_SPORTS_BOXERBOOK_KEY',
+    envVar: 'JELLYFIN_SPORTS_BOXERBOOK_KEY',
+    label: 'Custom · Boxing Data Key (Boxerbook)',
+    description:
+      "Boxing cards and results come from Boxerbook (ESPN has no boxing). A free key from boxerbook.com/developers/account lets this server read them more often (100 requests a day rather than 50). Kept on this server: it's never sent to the apps. Empty: boxing is read without a key.",
+    category: SPORTS,
+    type: 'string',
+    default: '',
+    sensitive: true,
   },
 ];

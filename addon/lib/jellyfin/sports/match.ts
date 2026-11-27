@@ -95,6 +95,9 @@ export function wordsOf(text: string): string[] {
     .normalize('NFKD')
     .replace(/\p{M}/gu, '')
     .toLowerCase()
+    // Letters with no accent to take off: Cieślak, Bodø, Łódź.
+    .replace(/ł/g, 'l').replace(/ø/g, 'o').replace(/æ/g, 'ae').replace(/œ/g, 'oe').replace(/ß/g, 'ss')
+    .replace(/[đð]/g, 'd').replace(/þ/g, 'th').replace(/ı/g, 'i')
     .replace(/&/g, ' & ')
     .replace(/['’`.]/g, '')
     .split(/[^a-z0-9&]+/)
@@ -135,7 +138,9 @@ export class TeamNames {
   constructor(games: Game[]) {
     const all = new Map<string, Name>();
     for (const game of games) {
-      for (const team of [game.home, game.away]) {
+      // A card's every fighter, so a guide naming any of its fights finds it.
+      const sides = [game.home, game.away, ...(game.bouts ?? []).flatMap((bout) => [bout.a, bout.b])];
+      for (const team of sides) {
         for (const words of namesOf(team)) {
           const joined = words.join(' ');
           const name = all.get(joined) ?? { words, teams: new Set<string>() };
@@ -182,7 +187,8 @@ export function gamesNamed(text: string, games: Game[], names: TeamNames): Game[
   if (!games.some((game) => game.kind === 'card')) return teams.size < 2 ? [] : games.filter(both);
   const words = ` ${wordsOf(text).join(' ')} `;
   const titled = (game: Game) => Boolean(game.title) && words.includes(` ${wordsOf(game.title!).join(' ')} `);
-  return games.filter((game) => both(game) || (game.kind === 'card' && titled(game)));
+  const anyBout = (game: Game) => (game.bouts ?? []).some((bout) => teams.has(teamKey(game, bout.a)) && teams.has(teamKey(game, bout.b)));
+  return games.filter((game) => both(game) || (game.kind === 'card' && (titled(game) || anyBout(game))));
 }
 
 /**
@@ -191,7 +197,9 @@ export function gamesNamed(text: string, games: Game[], names: TeamNames): Game[
  * some guides for Mexico's channels are), and runs at least half an hour into it. A preview that
  * ends as the game begins isn't it, nor is a replay hours later.
  */
-export function showsGame(programme: { start: number; end: number }, game: Pick<Game, 'start'> & Partial<Pick<Game, 'kind' | 'end'>>): boolean {
+export function showsGame(programme: { start: number; end: number }, game: Pick<Game, 'start'> & Partial<Pick<Game, 'kind' | 'end' | 'window'>>): boolean {
+  // A boxing card: its day, or hours either side of its time, as guides and sources differ.
+  if (game.window) return programme.start >= game.window.from && programme.start < game.window.to && programme.end > programme.start;
   // A fight card runs for hours, its prelims first and its main card after: any part of it.
   if (game.kind === 'card') {
     const end = Math.max(game.end ?? game.start, game.start + 3 * 60 * MINUTE);

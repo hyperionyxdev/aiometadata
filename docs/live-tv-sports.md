@@ -11,6 +11,8 @@ In the dashboard's "Custom: Live TV Sports" section, or the environment:
 
 - `JELLYFIN_SPORTS`: on by default. Off: nothing is asked of ESPN and the guide is sent as it is.
 - `JELLYFIN_SPORTS_LEAGUES`: the leagues read, by key (below); empty for all.
+- `JELLYFIN_SPORTS_BOXERBOOK_KEY`: a free Boxerbook API key (boxerbook.com/developers/account) for
+  boxing, kept on this server and never sent to the apps. Without one, boxing is read less often.
 
 ## What is sent out
 
@@ -38,7 +40,25 @@ in the order ESPN gives (prelims first), each with its weight class, start, stat
 the logo, record, winner), and once over its `method` ("KO/TKO", "Submission", "Decision"), `round`
 and `time`. While it's on, its `detail` names the fight under way and how many are left. It's found by
 its own name ("UFC 334 Prelims", "UFC Fight Night") or both main-event fighters, from just before its
-prelims to the end of its main card. ESPN has no boxing.
+prelims to the end of its main card.
+
+## Boxing
+
+ESPN has no boxing, so `boxing` cards come from Boxerbook's API: its schedule 30 days ahead and its
+results of the last two days, read on a budget, as its free use allows 100 requests a day with a key
+and 50 without. The schedule is read hourly (two-hourly without a key), and the results every two
+hours, or every 15 minutes (30 without a key) while a card is on or just over. Close to the day's
+limit only a card's results are read, and a refusal for the day waits as long as Boxerbook says.
+
+A card is a game of kind `card` as above, its main event first in `bouts` (Boxerbook lists it first),
+each fight with its weight class and what's at stake (`title`), and its result once Boxerbook has it.
+A card whose time isn't known yet (`untimed`) is found on its day, give or take half a day; one whose
+time is known, within six hours of it, as guides and sources differ. It's found by both boxers of any
+of its fights. Boxerbook's forecasts and betting markets are left out.
+
+Boxerbook's terms ask that its data be credited with a link to the page it came from: each boxing card
+carries `credit` (`text` and `url`), which the apps show with it. The apps only ever show the credit a
+server sends; they don't name a source themselves.
 
 ## How games are matched to channels
 

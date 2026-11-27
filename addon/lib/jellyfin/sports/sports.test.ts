@@ -15,6 +15,7 @@ import { sportsCheck } from './check';
 import { channelsByGame, GameFinder, gameInfo, ranked } from './guide';
 import { forgetGames, gameTagger, teamLogo } from './serve';
 import { programmesInParts } from './live';
+import { BoxingSource, divisionName, surnameOf } from './boxing';
 import { sportsLeagues, sportsOn } from './settings';
 import { programItem } from '../livetv/items';
 import type { ListedChannel } from '../livetv/lineup';
@@ -22,6 +23,7 @@ import type { Programme } from '../livetv/programmes';
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
+const DAY_MS = 24 * HOUR;
 const now = Date.parse('2026-11-27T21:00:00Z');
 const iso = (ms: number) => new Date(ms).toISOString().replace(/:\d\d\.\d{3}Z$/, 'Z');
 const nba = leagueByKey('nba')!;
@@ -464,4 +466,117 @@ test("a card is found by its name or its main event's fighters, over its prelims
   assert.equal(showsGame({ start: now, end: now + 3 * HOUR }, card), true, 'the prelims');
   assert.equal(showsGame({ start: now + 3 * HOUR, end: now + 6 * HOUR }, card), true, 'the main card');
   assert.equal(showsGame({ start: now + 26 * HOUR, end: now + 29 * HOUR }, card), false, 'a replay the next day');
+});
+
+// Boxing as Boxerbook gives it: cards with their bouts, the main event first, results apart.
+const boxingDay = Date.parse('2026-12-05T00:00:00Z');
+const boxerbookSchedule = { events: [
+  { id: 900, date: '2026-12-05', start_utc: '2026-12-06T01:00Z', venue: 'Arena', city: 'Glendale', country: 'US', promoter: 'PBC',
+    broadcasts: [{ platform: 'DAZN PPV', region: 'worldwide' }, { platform: 'Prime Video', region: 'worldwide' }, { platform: 'DAZN PPV', region: 'US' }],
+    url: 'https://boxerbook.com/events/900/2026-12-05-glendale',
+    bouts: [
+      { id: 1, status: 'scheduled', a: { id: 11, name: 'David Benavidez', record: '30-0-0' }, b: { id: 12, name: 'Michał Cieślak', record: '24-2-0' }, display: ['a', 'b'], division: 'cru', scheduled_rounds: 12, title_text: 'WBA and WBO cruiserweight titles', forecast: { p_a: 0.8 }, market: { favourite: 'a' } },
+      { id: 2, status: 'scheduled', a: { id: 13, name: 'Brian Mendoza' }, b: { id: 14, name: 'Vergil Ortiz Jr.' }, display: ['b', 'a'], division: 'mid', scheduled_rounds: 10 },
+    ] },
+  { id: 901, date: '2026-12-04', venue: 'Hall', city: 'Riyadh', country: 'SA', broadcasts: [], url: 'https://boxerbook.com/events/901/2026-12-04-riyadh',
+    bouts: [{ id: 3, status: 'scheduled', a: { id: 15, name: 'Jevgenijs Aleksejevs' }, b: { id: 16, name: 'Aaron McKenna' }, display: ['b', 'a'], division: 'w_fea' }] },
+] };
+const boxerbookResults = { bouts: [
+  { id: 2, date: '2026-12-05', a: { id: 13, name: 'Brian Mendoza' }, b: { id: 14, name: 'Vergil Ortiz Jr.' }, display: ['b', 'a'], winner: 'b', method: 'TKO', round: 7, time: '1:42' },
+] };
+
+function boxerbook(handler: (path: string, key?: string) => [number, any, Record<string, string>?]) {
+  const asked: Array<{ path: string; key?: string }> = [];
+  const fetcher: any = async (url: string, init: any) => {
+    const path = url.replace('https://boxerbook.test/v1', '');
+    const key = init?.headers?.['x-api-key'];
+    asked.push({ path, key });
+    const [status, body, headers] = handler(path, key);
+    return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...(headers ?? {}) } });
+  };
+  return { asked, fetcher };
+}
+
+test("boxing's weight classes and surnames read the way a guide writes them", () => {
+  assert.equal(divisionName('cru'), 'Cruiserweight');
+  assert.equal(divisionName('w_fea'), 'W Featherweight');
+  assert.equal(divisionName('other'), undefined);
+  assert.equal(surnameOf('Vergil Ortiz Jr.'), 'Ortiz');
+  assert.equal(surnameOf('Michał Cieślak'), 'Cieślak');
+  assert.deepEqual(wordsOf('Benavidez vs. Cieślak'), ['benavidez', 'vs', 'cieslak']);
+});
+
+test('a boxing card from Boxerbook: its main event first, results merged in, its credit, no odds', async () => {
+  let key: string | undefined = 'MY-KEY';
+  const { asked, fetcher } = boxerbook((path) => (path.startsWith('/schedule') ? [200, boxerbookSchedule] : [200, boxerbookResults]));
+  const boxing = new BoxingSource({ base: 'https://boxerbook.test/v1', fetch: fetcher, now: () => boxingDay + 26 * HOUR, key: () => key });
+  const read = await boxing.games(leagueByKey('boxing')!, boxingDay - DAY_MS, boxingDay + 3 * DAY_MS);
+  assert.deepEqual(asked.map((a) => a.path), ['/schedule?when=30d', '/results?days=2']);
+  assert.equal(asked[0].key, 'MY-KEY', 'the key not sent');
+  assert.deepEqual(read.games.map((g) => g.name), ['Aaron McKenna vs Jevgenijs Aleksejevs', 'David Benavidez vs Michał Cieślak']);
+  const card = read.games[1];
+  assert.equal(card.kind, 'card');
+  assert.equal(card.start, Date.parse('2026-12-06T01:00Z'));
+  assert.equal(card.state, 'in', 'a card under way, a result in');
+  assert.deepEqual(card.broadcasts, ['DAZN PPV', 'Prime Video']);
+  assert.equal(card.bouts?.[0].main, true);
+  assert.equal(card.bouts?.[0].title, 'WBA and WBO cruiserweight titles');
+  assert.equal(card.bouts?.[0].weight, 'Cruiserweight');
+  const done = card.bouts?.[1];
+  assert.equal(done?.a.name, 'Vergil Ortiz Jr.', 'shown in the order Boxerbook shows them');
+  assert.equal(done?.a.winner, true);
+  assert.equal(done?.method, 'TKO');
+  assert.equal(done?.round, 7);
+  assert.deepEqual(card.credit, { text: 'Data from Boxerbook', url: 'https://boxerbook.com/events/900/2026-12-05-glendale' });
+  const shown = gameInfo(card, 'game');
+  assert.deepEqual(shown.credit, card.credit);
+  assert.equal(JSON.stringify(shown).includes('favourite'), false, 'betting markets sent to the apps');
+  assert.equal(JSON.stringify(shown).includes('MY-KEY'), false, 'the key sent to the apps');
+  const untimed = read.games[0];
+  assert.equal(untimed.untimed, true);
+  assert.equal(untimed.detail, 'Final', 'a card days gone shown as still to come');
+  // Read again before it's due: nothing asked.
+  await boxing.games(leagueByKey('boxing')!, boxingDay - DAY_MS, boxingDay + 3 * DAY_MS);
+  assert.equal(asked.length, 2);
+  key = undefined;
+});
+
+test("a boxing card is found by any of its fights' boxers, over its day when its time isn't known", () => {
+  const boxing = new BoxingSource();
+  (boxing as any).keepSchedule(boxerbookSchedule, boxingDay);
+  const games: Game[] = [...(boxing as any).cards].map(([id, card]: [string, any]) => (boxing as any).cardOf(leagueByKey('boxing')!, id, card, boxingDay));
+  const names = new TeamNames(games);
+  const named = (text: string) => gamesNamed(text, games, names).map((g) => g.id);
+  assert.deepEqual(named('Boxeo: Benavidez vs. Cieslak'), ['boxing:900']);
+  assert.deepEqual(named('PBC on Prime Video: Benavidez vs. Cieślak'), ['boxing:900']);
+  assert.deepEqual(named('LIVE EVENT 03 - 6pm Ortiz v Mendoza'), ['boxing:900'], 'a fight lower on the card');
+  assert.deepEqual(named('Benavidez Countdown'), []);
+  const timed = games.find((g) => g.id === 'boxing:900')!;
+  assert.equal(showsGame({ start: Date.parse('2026-12-05T22:00Z'), end: Date.parse('2026-12-06T04:00Z') }, timed), true, 'a guide hours before its time');
+  assert.equal(showsGame({ start: Date.parse('2026-12-07T22:00Z'), end: Date.parse('2026-12-08T01:00Z') }, timed), false, 'a replay days later');
+  const untimed = games.find((g) => g.id === 'boxing:901')!;
+  assert.equal(showsGame({ start: Date.parse('2026-12-04T19:00Z'), end: Date.parse('2026-12-04T23:00Z') }, untimed), true);
+  assert.equal(showsGame({ start: Date.parse('2026-12-06T19:00Z'), end: Date.parse('2026-12-06T23:00Z') }, untimed), false);
+});
+
+test("Boxerbook's limits are kept to: a day's limit reached waits, a refused key is said", async () => {
+  let status = 429;
+  const { asked, fetcher } = boxerbook(() => [status, { title: 'limit' }, { 'retry-after': '3600', 'x-ratelimit-day-remaining': '0' }]);
+  let clock = boxingDay;
+  const boxing = new BoxingSource({ base: 'https://boxerbook.test/v1', fetch: fetcher, now: () => clock, key: () => 'KEY' });
+  const first = await boxing.games(leagueByKey('boxing')!, boxingDay, boxingDay + DAY_MS);
+  assert.equal(first.failed, 'over its daily limit');
+  const reads = asked.length;
+  clock += 30 * MINUTE;
+  await boxing.games(leagueByKey('boxing')!, boxingDay, boxingDay + DAY_MS);
+  assert.equal(asked.length, reads, 'asked again while told to wait');
+  // Later the same day, nothing left: still nothing asked. The next day, asked again.
+  clock += 2 * HOUR;
+  await boxing.games(leagueByKey('boxing')!, boxingDay, boxingDay + DAY_MS);
+  assert.equal(asked.length, reads, 'asked with none left today');
+  status = 401;
+  clock = boxingDay + DAY_MS + HOUR;
+  const refused = await boxing.games(leagueByKey('boxing')!, boxingDay, boxingDay + DAY_MS);
+  assert.equal(refused.failed, 'its key was refused');
+  assert.equal(asked.length > reads, true);
 });

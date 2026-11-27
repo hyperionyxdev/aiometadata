@@ -48,7 +48,8 @@ test('the logins stay out of the dashboard', () => {
   for (const name of LOGINS) {
     assert.equal(getSettingDefinition(name), undefined, `${name} is in the dashboard`);
   }
-  for (const def of CUSTOM_SETTINGS) assert.notEqual(def.sensitive, true);
+  // The one secret kept in the dashboard, as its owner asked: masked there and left out of exports.
+  for (const def of CUSTOM_SETTINGS) assert.equal(def.sensitive === true, def.key === 'JELLYFIN_SPORTS_BOXERBOOK_KEY', `${def.key} is or isn't secret`);
 });
 
 test('each custom setting is in the registry once', () => {
