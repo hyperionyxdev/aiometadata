@@ -32,6 +32,8 @@ interface Check {
   from: string;
   to: string;
   channels: number;
+  channelsRead?: number;
+  seconds?: number;
   channelsWithGuide: number;
   programmes: number;
   leagues: Array<{ league: string; games: number; withChannels: number }>;
@@ -49,7 +51,7 @@ const named = (channel: { channel: string; number?: string }) => (channel.number
 function asText(checks: Check[]): string {
   const lines: string[] = [];
   for (const check of checks) {
-    lines.push(`Sports check ${check.checkedAt}: ${check.channels} channels, ${check.channelsWithGuide} with a guide, ${check.programmes} programmes`);
+    lines.push(`Sports check ${check.checkedAt}: ${check.channelsRead ?? check.channels} of ${check.channels} channels read in ${check.seconds ?? "?"}s (sports channels first), ${check.channelsWithGuide} with a guide, ${check.programmes} programmes${(check.configurations?.length ?? 0) > 1 ? `, for ${check.configurations!.length} configurations sharing this guide` : ""}`);
     lines.push("Leagues (found on a channel / games):");
     for (const row of check.leagues) lines.push(`  ${row.league}: ${row.withChannels} / ${row.games}`);
     if (check.failed.length) lines.push(`Not read: ${check.failed.map((f) => `${f.league} (${f.why})`).join(", ")}`);
@@ -75,7 +77,9 @@ function CheckResult({ check }: { check: Check }) {
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        {found} of {total} games found on your channels, from {when(check.from)} to {when(check.to)}. {check.channels} channels,{" "}
+        {found} of {total} games found on your channels, from {when(check.from)} to {when(check.to)}. Read{" "}
+        {check.channelsRead ?? check.channels} of {check.channels} channels in {check.seconds ?? "?"}s, sports channels first
+        {check.channelsRead !== undefined && check.channelsRead < check.channels ? " (stopped there to answer in time)" : ""};{" "}
         {check.channelsWithGuide} with a guide.
       </p>
       <div className="overflow-x-auto">
@@ -189,12 +193,12 @@ export function SportsCheck() {
       if (isAdmin && adminKey) headers["x-admin-key"] = adminKey;
       const ownPage = ownPageToken();
       if (ownPage) headers["x-own-page"] = ownPage;
-      const response = await fetch("/api/dashboard/jellyfin/sports-check", { headers });
+      const response = await fetch("/api/dashboard/jellyfin/sports-check", { headers, signal: AbortSignal.timeout(5 * 60 * 1000) });
       const body = await response.json().catch(() => null);
       if (!response.ok) throw new Error(body?.error || `The check failed (${response.status})`);
       setChecks(Array.isArray(body?.guides) ? body.guides : [body]);
     } catch (err: any) {
-      setError(err?.message || "The check failed");
+      setError(err?.name === "TimeoutError" ? "The check took too long; try again in a minute" : err?.message || "The check failed");
     } finally {
       setRunning(false);
     }
@@ -215,8 +219,8 @@ export function SportsCheck() {
       <div>
         <p className="text-sm font-medium">Check the guide against today's games</p>
         <p className="text-sm text-muted-foreground">
-          Reads the games from 6 hours ago to 30 hours ahead and the whole Live TV guide over that time, and shows which games
-          were found on which channels. Takes a few seconds on a large guide.
+          Reads the games from 6 hours ago to 30 hours ahead and the Live TV guide over that time, sports channels first, and
+          shows which games were found on which channels. On a very large guide it reads for up to a minute and a half.
         </p>
       </div>
       <div className="flex flex-wrap gap-2">

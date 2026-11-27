@@ -11,7 +11,7 @@ import { AddressInfo } from 'net';
 import { espnDay, espnDays, gamesOf, keepFor, Scoreboard, type Game } from './espn';
 import { leagueByKey } from './leagues';
 import { gameOfChannel, gamesNamed, looksLikeGame, namesOf, showsGame, TeamNames, wordsOf } from './match';
-import { sportsCheck } from './check';
+import { sportsCheck, sportsFirst } from './check';
 import { channelsByGame, GameFinder, gameInfo, ranked } from './guide';
 import { forgetGames, gameTagger, teamLogo } from './serve';
 import { programmesInParts } from './live';
@@ -302,6 +302,7 @@ test('the check matches games to channels, by a programme or by the channel, and
   const nbaRow = check.leagues.find((row) => row.league === 'NBA');
   assert.deepEqual(nbaRow, { league: 'NBA', games: 3, withChannels: 2 });
   assert.equal(check.channels, 7);
+  assert.equal(check.channelsRead, 7);
   assert.equal(check.channelsWithGuide, 6);
 });
 
@@ -579,4 +580,29 @@ test("Boxerbook's limits are kept to: a day's limit reached waits, a refused key
   const refused = await boxing.games(leagueByKey('boxing')!, boxingDay, boxingDay + DAY_MS);
   assert.equal(refused.failed, 'its key was refused');
   assert.equal(asked.length > reads, true);
+});
+
+test('the check reads sports channels first, a share at a time, and answers with what it has when time is up', async () => {
+  const lineup: ListedChannel[] = [
+    ...Array.from({ length: 5 }, (_, n): ListedChannel => ({ meta: { type: 'tv', id: `film${n}`, name: `Films ${n}`, groups: ['Movies'] } })),
+    { meta: { type: 'tv', id: 'espn', name: 'ESPN' } },
+    { meta: { type: 'tv', id: 'tudn', name: 'TUDN', groups: ['MX: Deportes'] } },
+    { meta: { type: 'tv', id: 'news', name: 'News 24' } },
+  ];
+  assert.deepEqual(sportsFirst(lineup).slice(0, 2).map((c) => c.meta.id), ['espn', 'tudn']);
+  let clock = 0;
+  const asked: string[][] = [];
+  const board = new Scoreboard({ base, now: () => now });
+  const check = await sportsCheck({
+    channels: async () => lineup,
+    programmes: async (part) => {
+      asked.push(part.map((c) => c.meta.id));
+      clock += 60 * 1000;
+      return new Map();
+    },
+  }, board, now, { chunk: 3, budgetMs: 90 * 1000, clock: () => clock });
+  assert.deepEqual(asked[0], ['espn', 'tudn', 'film0'], 'sports channels not read first');
+  assert.equal(asked.length, 2, 'read on past the time given');
+  assert.equal(check.channelsRead, 6);
+  assert.equal(check.channels, 8);
 });

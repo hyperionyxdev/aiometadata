@@ -21,13 +21,20 @@ export async function programmesInParts(read: (metas: ListedChannel['meta'][]) =
   return all;
 }
 
+/** Which guide a configuration's Live TV is: configurations with the same one share a key. Null without Live TV. */
+export async function sportsGuideKey(gate: GateDeps, config: any): Promise<string | null> {
+  const live = await liveTvReady(gate, config);
+  return live ? [live.base, ...live.catalogs.map((catalog) => `${catalog.type}/${catalog.id}`)].join('|') : null;
+}
+
 /** The sports check over a configuration's own Live TV; null where it has none. */
 export async function checkSportsFor(gate: GateDeps, config: any, now = Date.now()): Promise<SportsCheck | null> {
   const live = await liveTvReady(gate, config);
   if (!live) return null;
   const check = await sportsCheck({
     channels: async () => (await listChannels(gate.addon, live.base, live.catalogs, { startIndex: 0, limit: ALL_CHANNELS })).channels,
-    programmes: (channels, from, to) => programmesInParts((metas) => programmesFor(gate.addon, live.base, live.reach, metas, from, to), channels),
+    // The check reads a share of the channels at a time itself.
+    programmes: (channels, from, to) => programmesFor(gate.addon, live.base, live.reach, channels.map((channel) => channel.meta), from, to),
   }, scoreboard, now);
   return { guide: [live.base, ...live.catalogs.map((catalog) => `${catalog.type}/${catalog.id}`)].join('|'), ...check };
 }

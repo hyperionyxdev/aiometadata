@@ -24,14 +24,20 @@ export function registerJellyfinDashboardRoutes(addon: any, deps: any): void {
   addon.get("/api/dashboard/jellyfin/sports-check", requireDashboardAdmin, async (req, res) => {
     try {
       // Configurations with the same Live TV share one guide: checked once, naming them all.
-      const checks: any[] = [];
+      const jellyfin = require('./index');
+      const byGuide = new Map<string, { config: any; configurations: string[] }>();
       for (const userUUID of ((await database.getAllUserUUIDs().catch(() => [])) as string[]).slice(0, 50)) {
         const config = await database.getUserConfig(userUUID).catch(() => null);
-        const check = config ? await require('./index').checkSports(config) : null;
-        if (!check) continue;
-        const same = checks.find((held) => held.guide === check.guide);
-        if (same) same.configurations.push(userUUID);
-        else checks.push({ configurations: [userUUID], ...check });
+        const guide = config ? await jellyfin.sportsGuideOf(config) : null;
+        if (!guide) continue;
+        const held = byGuide.get(guide);
+        if (held) held.configurations.push(userUUID);
+        else byGuide.set(guide, { config, configurations: [userUUID] });
+      }
+      const checks: any[] = [];
+      for (const { config, configurations } of byGuide.values()) {
+        const check = await jellyfin.checkSports(config);
+        if (check) checks.push({ configurations, ...check });
       }
       if (!checks.length) {
         res.status(404).json({ error: 'No configuration has Live TV' });

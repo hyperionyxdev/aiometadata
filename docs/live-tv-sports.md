@@ -125,7 +125,10 @@ the games from 6 hours ago to 30 hours ahead, and the whole guide over that time
   is listed at a time too far from ESPN's.
 - `failed`: leagues whose scoreboard couldn't be read.
 
-The whole guide is read, a thousand channels at a time.
+The guide is read a thousand channels at a time, channels whose name or group looks like sport
+first (ESPN, TUDN, DAZN, Deportes, PPV…), for up to a minute and a half: on a very large lineup it
+answers with what it read in that time, saying how many channels that was (`channelsRead` of
+`channels`, in `seconds`). Configurations sharing one guide are checked once.
 
 It reads the whole guide, so on a large one it takes a few seconds.
 

@@ -56,7 +56,10 @@ export interface SportsCheck {
   checkedAt: string;
   from: string;
   to: string;
+  /** Channels listed, how many of them were read (sports channels first) in the time given, and that time. */
   channels: number;
+  channelsRead: number;
+  seconds: number;
   channelsWithGuide: number;
   programmes: number;
   leagues: Array<{ league: string; games: number; withChannels: number }>;
@@ -76,57 +79,86 @@ const textOf = (programme: Programme): string => [programme.title, programme.epi
 const sporty = (programme: Programme): boolean =>
   programme.live === true || (programme.genres ?? []).some((genre) => /sport/i.test(genre));
 
-export async function sportsCheck(source: CheckSource, board: Scoreboard, now: number): Promise<SportsCheck> {
+/** Channels likely to show sport, by their name or group, read first when time is short. */
+const SPORTY_CHANNEL = /sport|espn|fox ?sports|tudn|dazn|bein|tsn|sky ?sports|tnt ?sports|nba|nfl|mlb|nhl|mls|ufc|ppv|event|deporte|futbol|fútbol|liga|premier|football|soccer|golf|tennis|racing|fight|boxing|box(eo)?\b|match|game|acc ?network|sec ?network|big ?ten|pac-?12|peacock|paramount|prime|flo/i;
+
+/** Sports channels first, then the rest, each in the lineup's order. */
+export function sportsFirst(channels: ListedChannel[]): ListedChannel[] {
+  const sporty = (c: ListedChannel) => SPORTY_CHANNEL.test(c.meta.name) || (c.meta.groups ?? []).some((group) => SPORTY_CHANNEL.test(group));
+  return [...channels.filter(sporty), ...channels.filter((c) => !sporty(c))];
+}
+
+export interface CheckOptions {
+  /** How long the guide is read for before the check answers with what it has. */
+  budgetMs?: number;
+  /** Channels read at a time. */
+  chunk?: number;
+  clock?: () => number;
+}
+
+export async function sportsCheck(source: CheckSource, board: Scoreboard, now: number, options: CheckOptions = {}): Promise<SportsCheck> {
+  const budgetMs = options.budgetMs ?? 90 * 1000;
+  const chunk = options.chunk ?? 1000;
+  const clock = options.clock ?? Date.now;
+  const began = clock();
   const from = now - BEHIND_MS;
   const to = now + AHEAD_MS;
-  const [read, channels] = await Promise.all([board.games(from, to), source.channels()]);
+  const [read, listed] = await Promise.all([board.games(from, to), source.channels()]);
   const games = read.games;
-  const guide = await source.programmes(channels, from - 2 * HOUR, to + 4 * HOUR);
+  const channels = sportsFirst(listed);
   const finder = new GameFinder(games, now);
-  const byGame = channelsByGame(finder, channels, guide);
   const numberOf = (channel: ListedChannel) => channel.number ?? channel.meta.channelNumber;
-  const found = new Map<string, CheckedChannel[]>([...byGame].map(([id, list]) => [id, list.map(({ channel, by, programme }) => {
-    const number = numberOf(channel);
-    return { channel: channel.meta.name, ...(number ? { number } : {}), by, ...(by === 'programme' && programme ? { programme: textOf(programme) } : {}) };
-  })]));
-
+  const found = new Map<string, CheckedChannel[]>();
   const unmatchedProgrammes: SportsCheck['unmatchedProgrammes'] = [];
   const unmatchedChannels: SportsCheck['unmatchedChannels'] = [];
+  const wanted = new Set(games.flatMap((game) => [teamKey(game, game.home), teamKey(game, game.away)]));
+  const byTeam = new Map<string, Array<{ channel: ListedChannel; programme: Programme }>>();
   let programmes = 0;
-  for (const channel of channels) {
-    const own = guide.get(keyOf(channel)) ?? [];
-    programmes += own.length;
-    const number = numberOf(channel);
-    const named = finder.channelGame(channel);
-    if (!named && looksLikeGame(channel.meta.name) && unmatchedChannels.length < MAX_LISTED) {
-      unmatchedChannels.push({ channel: channel.meta.name, ...(number ? { number } : {}) });
+  let withGuide = 0;
+  let readCount = 0;
+
+  // A share of the guide at a time, matched and let go, until all is read or the time is up.
+  for (let at = 0; at < channels.length; at += chunk) {
+    if (at > 0 && clock() - began > budgetMs) break;
+    const part = channels.slice(at, at + chunk);
+    const guide = await source.programmes(part, from - 2 * HOUR, to + 4 * HOUR);
+    readCount += part.length;
+    for (const [gameId, list] of channelsByGame(finder, part, guide)) {
+      const held = found.get(gameId) ?? [];
+      for (const { channel, by, programme } of list) {
+        const number = numberOf(channel);
+        held.push({ channel: channel.meta.name, ...(number ? { number } : {}), by, ...(by === 'programme' && programme ? { programme: textOf(programme) } : {}) });
+      }
+      found.set(gameId, held);
     }
-    if (named) continue;
-    for (const programme of own) {
-      const text = textOf(programme);
-      if (programme.start < from || programme.start > to || !sporty(programme) || !looksLikeGame(text)) continue;
-      if (finder.programmeGames(programme).length || unmatchedProgrammes.length >= MAX_LISTED) continue;
-      unmatchedProgrammes.push({ channel: channel.meta.name, ...(number ? { number } : {}), programme: text, start: iso(programme.start) });
+    for (const channel of part) {
+      const own = guide.get(keyOf(channel)) ?? [];
+      programmes += own.length;
+      if (own.length) withGuide++;
+      const number = numberOf(channel);
+      const named = finder.channelGame(channel);
+      if (!named && looksLikeGame(channel.meta.name) && unmatchedChannels.length < MAX_LISTED) {
+        unmatchedChannels.push({ channel: channel.meta.name, ...(number ? { number } : {}) });
+      }
+      for (const programme of own) {
+        const text = textOf(programme);
+        if (programme.start >= from - NEAR_MS && programme.start <= to + NEAR_MS) {
+          for (const team of finder.teamsIn(text)) {
+            if (!wanted.has(team)) continue;
+            const list = byTeam.get(team) ?? [];
+            if (list.length < 50) list.push({ channel, programme });
+            byTeam.set(team, list);
+          }
+        }
+        if (named || programme.start < from || programme.start > to || !sporty(programme) || !looksLikeGame(text)) continue;
+        if (finder.programmeGames(programme).length || unmatchedProgrammes.length >= MAX_LISTED) continue;
+        unmatchedProgrammes.push({ channel: channel.meta.name, ...(number ? { number } : {}), programme: text, start: iso(programme.start) });
+      }
     }
   }
 
   // Programmes naming a team, near enough a game of it found nowhere to be worth a look.
   const unfound = games.filter((game) => !found.has(game.id));
-  const byTeam = new Map<string, Array<{ channel: ListedChannel; programme: Programme }>>();
-  if (unfound.length) {
-    const wanted = new Set(unfound.flatMap((game) => [teamKey(game, game.home), teamKey(game, game.away)]));
-    for (const channel of channels) {
-      for (const programme of guide.get(keyOf(channel)) ?? []) {
-        if (programme.start < from - NEAR_MS || programme.start > to + NEAR_MS) continue;
-        for (const team of finder.teamsIn(textOf(programme))) {
-          if (!wanted.has(team)) continue;
-          const list = byTeam.get(team) ?? [];
-          list.push({ channel, programme });
-          byTeam.set(team, list);
-        }
-      }
-    }
-  }
   const nearMisses: NearMiss[] = [];
   for (const game of unfound) {
     if (nearMisses.length >= MAX_NEAR_GAMES) break;
@@ -163,7 +195,9 @@ export async function sportsCheck(source: CheckSource, board: Scoreboard, now: n
     from: iso(from),
     to: iso(to),
     channels: channels.length,
-    channelsWithGuide: channels.filter((channel) => (guide.get(keyOf(channel)) ?? []).length > 0).length,
+    channelsRead: readCount,
+    channelsWithGuide: withGuide,
+    seconds: Math.round((clock() - began) / 1000),
     programmes,
     leagues,
     failed: read.failed.map(({ league, why }) => ({ league: LEAGUES.find((l) => l.key === league)?.name ?? league, why })),

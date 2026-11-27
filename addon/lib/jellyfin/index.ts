@@ -85,7 +85,7 @@ import { liveReportGuard } from './livetv/reports';
 import { asDefault, createLivePins, liveSourceIds, pickLive, pinScope, sourcesNamed } from './livetv/sources';
 import { GONE, guideChannels, placementFor } from './livetv/lineup';
 import { programmesFor } from './livetv/guide';
-import { checkSportsFor } from './sports/live';
+import { checkSportsFor, sportsGuideKey } from './sports/live';
 import { gameTagger, registerSports } from './sports/serve';
 import { unnamedChannels } from './livetv/limits';
 import { dispatcharrFor, dispatcharrLive, type DispatcharrLive } from './dispatcharr';
@@ -645,6 +645,8 @@ export async function readCalendar(userUUID: string, config: any, from: number, 
 
 /** How well a configuration's guide matches the day's games (sports/check.ts); null without Live TV. */
 export const checkSports = (config: any) => checkSportsFor(liveTvGate, config);
+/** Which guide a configuration's Live TV is, so the check runs once for configurations sharing one. */
+export const sportsGuideOf = (config: any) => sportsGuideKey(liveTvGate, config);
 
 const episodeLabel = (episode: any) => ({
   season: Number.isFinite(episode?.ParentIndexNumber) ? episode.ParentIndexNumber : null,
