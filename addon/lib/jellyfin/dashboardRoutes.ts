@@ -188,6 +188,22 @@ export function registerJellyfinDashboardRoutes(addon: any, deps: any): void {
     }
   });
 
+  // How well the configuration's Live TV guide matches the day's games, before the apps show any.
+  addon.get("/api/dashboard/jellyfin/:userUUID/sports-check", jellyfinRoute({ reach: "config", heavy: true }), async (req, res) => {
+    try {
+      const config = await database.getUserConfig(String(req.params.userUUID)).catch(() => null);
+      const check = config ? await require('./index').checkSports(config) : null;
+      if (!check) {
+        res.status(404).json({ error: 'No such configuration, or it has no Live TV' });
+        return;
+      }
+      res.json(check);
+    } catch (error) {
+      consola.error('[Dashboard API] Error:', error);
+      res.status(500).json({ error: 'Failed to check the guide against the day\'s games' });
+    }
+  });
+
   addon.get("/api/dashboard/jellyfin/:userUUID/calendar/feed", jellyfinRoute({ reach: "profile" }), async (req, res) => {
     try {
       const profile = typeof req.query.profile === 'string' ? req.query.profile : null;
