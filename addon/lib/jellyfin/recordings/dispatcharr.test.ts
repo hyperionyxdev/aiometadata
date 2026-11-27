@@ -14,7 +14,7 @@ import express from 'express';
 import { AddressInfo } from 'net';
 import { DispatcharrLive } from '../dispatcharr';
 import type { DispatcharrSettings } from '../dispatcharr/settings';
-import { DispatcharrRecorder, interruptedWords, seriesIdOf, stateOf } from './dispatcharr';
+import { DispatcharrRecorder, interruptedWords, recordedLength, seriesIdOf, stateOf } from './dispatcharr';
 import { recordingNumberOf, registerRecordings, seriesTimerIdOf, slotIdOf, slotNumberOf, timerIdOf } from './jellyfin';
 import { LocalRecorder } from './local';
 import { RecordingOwners, recordingOwners, useRecordingOwners } from './owners';
@@ -776,4 +776,11 @@ test("this server's own recorder makes no repeating recordings, and says so", as
     await local.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("a recording's length is from when Dispatcharr began it to when it ended, else its window", () => {
+  assert.equal(recordedLength({ start_time: iso(now), end_time: iso(now + 60 * MIN),
+    custom_properties: { started_at: '2026-11-27 17:59:40.123456', ended_at: '2026-11-27 18:00:00.123456' } }), 20);
+  assert.equal(recordedLength({ start_time: iso(now), end_time: iso(now + 60 * MIN), custom_properties: {} }), 3600);
+  assert.equal(recordedLength({ custom_properties: {} }), undefined);
 });

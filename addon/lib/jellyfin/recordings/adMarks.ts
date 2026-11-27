@@ -40,6 +40,23 @@ export function parseEditList(text: string): AdBreak[] {
   return joined;
 }
 
+/** Shorter than this, a recording can't be told apart from its ads: a detector marks it all. */
+const SHORTEST_RECORDING_S = 5 * 60;
+/** More of a recording than this marked as ads, and the marks are wrong: even a channel heavy with them shows more programme than ads. */
+const MOST_ADS = 0.5;
+
+/**
+ * The breaks, where they could be right for a recording this long (seconds; unknown, as marked):
+ * none for a recording too short to tell, or where they take in most of it, as a detector's do on
+ * a clip with nothing but itself to compare.
+ */
+export function believable(breaks: AdBreak[], length: number | undefined): AdBreak[] {
+  if (!breaks.length || length === undefined || !Number.isFinite(length) || length <= 0) return breaks;
+  if (length < SHORTEST_RECORDING_S) return [];
+  const marked = breaks.reduce((sum, brk) => sum + Math.max(0, Math.min(brk.end, length) - Math.max(brk.start, 0)), 0);
+  return marked > length * MOST_ADS ? [] : breaks;
+}
+
 /**
  * A file the recorder names by its own path (as its container sees it), found in `folder`, where
  * this server sees the recorder's recordings: the longest end of the path that's there, so the

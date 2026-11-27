@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { findIn, parseEditList, readAdMarks } from './adMarks';
+import { believable, findIn, parseEditList, readAdMarks } from './adMarks';
 
 let folder = '';
 
@@ -68,4 +68,15 @@ test('the list is read again once it changes', () => {
   fs.utimesSync(file, later, later);
   assert.deepEqual(readAdMarks(folder, '/rec/a/show.edl'), [{ start: 10, end: 20 }, { start: 30, end: 40 }]);
   assert.equal(readAdMarks(folder, '/rec/a/missing.edl'), null);
+});
+
+test("marks that take in most of a recording, or any on one too short to tell, aren't believed", () => {
+  const hour = 3600;
+  const breaks = [{ start: 600, end: 780 }, { start: 1800, end: 2040 }];
+  assert.deepEqual(believable(breaks, hour), breaks, 'an hour with seven minutes of ads');
+  // A twenty-second clip marked from end to end, as a detector marks one it can't tell apart.
+  assert.deepEqual(believable([{ start: 0, end: 20 }], 20), []);
+  assert.deepEqual(believable([{ start: 0, end: 200 }], 240), [], 'shorter than five minutes');
+  assert.deepEqual(believable([{ start: 0, end: 2400 }], hour), [], 'two thirds of it');
+  assert.deepEqual(believable(breaks, undefined), breaks, 'its length unknown: as marked');
 });

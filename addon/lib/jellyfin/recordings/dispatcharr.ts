@@ -21,7 +21,7 @@ import {
   type SlotAsk,
   type SlotEntry,
 } from './types';
-import { readAdMarks, type AdBreak } from './adMarks';
+import { believable, readAdMarks, type AdBreak } from './adMarks';
 import { dayText, isTimeZone, lastOf, nextOf, readRepeat, repeatRuleOf, timeText } from './repeats';
 import { dispatcharrRecordingsFolder } from './settings';
 
@@ -42,6 +42,21 @@ const numberOf = (value: unknown): number | undefined => {
   const n = Number(value);
   return value !== null && value !== undefined && value !== '' && Number.isFinite(n) ? n : undefined;
 };
+
+/**
+ * How long a recording ran, in seconds: from when Dispatcharr began it to when it ended (both kept
+ * in its own clock's time, so their difference is right whatever its time zone), else its window.
+ */
+export function recordedLength(row: any): number | undefined {
+  const props = row?.custom_properties ?? {};
+  const naive = (value: unknown) => (typeof value === 'string' && value ? Date.parse(value.replace(' ', 'T').replace(/([+-]\d\d:\d\d|Z)$/, '') + 'Z') : NaN);
+  const began = naive(props.started_at);
+  const ended = naive(props.ended_at);
+  if (began < ended) return (ended - began) / 1000;
+  const start = timeOf(row?.start_time);
+  const end = timeOf(row?.end_time);
+  return start < end ? (end - start) / 1000 : undefined;
+}
 
 /** What Dispatcharr says of a recording cut short, in plain words. */
 export function interruptedWords(reason: unknown): string {
@@ -489,7 +504,7 @@ export class DispatcharrRecorder implements Recorder {
     const file = textOf(props.file_path);
     const list = path.posix.basename(textOf(detected?.edl));
     if (!detected || detected.status !== 'completed' || detected.mode !== 'mark' || !file || !list) return [];
-    return readAdMarks(folder, path.posix.join(path.posix.dirname(file), list)) ?? [];
+    return believable(readAdMarks(folder, path.posix.join(path.posix.dirname(file), list)) ?? [], recordedLength(row));
   }
 
   async open(id: number, { range, path }: { range?: string; path?: string }): Promise<MediaAnswer | null> {
