@@ -104,7 +104,8 @@ and every team playing that day is known, so a name isn't taken for a team it's 
   three seconds at most for the first reading; until it's done, `complete` is false and the games
   come without their channels.
 - **Team logos**, `GET /AIOStreams/Sports/Logo/{league}/{team}` (the `logo` path): fetched by this
-  server from ESPN's image host only, and kept a week, so the apps never ask ESPN.
+  server from ESPN's image host only, and kept a week, so the apps never ask ESPN. Like Jellyfin's
+  own pictures it needs no sign-in, since apps load pictures without one; the list of games does.
 
 The guide waits at most a second and a half for games the first time they're read; after that, the
 last games found are used while newer ones are read, so it never waits on ESPN.

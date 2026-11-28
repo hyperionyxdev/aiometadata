@@ -21,6 +21,7 @@ import { sportsLeagues, sportsOn } from './settings';
 import { programItem } from '../livetv/items';
 import type { ListedChannel } from '../livetv/lineup';
 import type { Programme } from '../livetv/programmes';
+import { isAnonymous } from '../context';
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
@@ -677,4 +678,15 @@ test('which channel shows which game is read once whole, then only the sports ch
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.deepEqual(asked, [['philly', 'espn']], 'not only the channels found showing sport, and the sports channels');
   forgetGameChannels();
+});
+
+test('a team logo is sent without a sign-in, as pictures are; the list of games is not', () => {
+  const asked = (method: string, path: string) => isAnonymous({ method, path });
+  assert.equal(asked('GET', '/AIOStreams/Sports/Logo/nba/20'), true);
+  assert.equal(asked('HEAD', '/AIOStreams/Sports/Logo/epl/357'), true);
+  assert.equal(asked('GET', '/Items/abc/Images/Primary'), true);
+  assert.equal(asked('GET', '/AIOStreams/Games'), false);
+  assert.equal(asked('POST', '/AIOStreams/Sports/Logo/nba/20'), false);
+  assert.equal(asked('GET', '/AIOStreams/Sports/Logo/nba/20/more'), false);
+  assert.equal(asked('GET', '/AIOStreams/Sports/Logo/nba'), false);
 });

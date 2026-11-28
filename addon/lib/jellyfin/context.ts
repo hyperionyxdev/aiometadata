@@ -272,10 +272,11 @@ export async function loadConfig(req: any): Promise<any> {
 
 // Artwork is anonymous in Jellyfin, because a client renders it with a plain
 // image tag that cannot carry a token. Requiring one leaves every poster blank
-// in the clients that do not put the key in the query.
-const ANONYMOUS_PATH = /^\/(?:(?:Items|Users)\/[^/]+\/Images\/|UserImage$)/i;
+// in the clients that do not put the key in the query. A team's logo is artwork
+// the same way: the server only ever sends the image host's public pictures.
+const ANONYMOUS_PATH = /^\/(?:(?:Items|Users)\/[^/]+\/Images\/|UserImage$|AIOStreams\/Sports\/Logo\/[^/]+\/[^/]+$)/i;
 
-const isAnonymous = (req: any): boolean => (req.method === 'GET' || req.method === 'HEAD') && ANONYMOUS_PATH.test(String(req.path || ''));
+export const isAnonymous = (req: any): boolean => (req.method === 'GET' || req.method === 'HEAD') && ANONYMOUS_PATH.test(String(req.path || ''));
 
 export function requireAuth(req: any, res: any, next: any): void {
   if (req.jellyfin?.authenticated || isAnonymous(req)) {
