@@ -10,9 +10,9 @@ import type { Programme } from '../livetv/programmes';
 import { timeOf } from '../livetv/query';
 import type { LiveTvDeps } from '../livetv/routes';
 import { scoreboard as sharedBoard, type Scoreboard } from './espn';
-import { channelsByGame, GameFinder, gameInfo, ranked } from './guide';
+import { GameFinder, gameInfo, ranked } from './guide';
 import { leagueByKey } from './leagues';
-import { programmesInParts } from './live';
+import { gameChannels } from './channels';
 import { sportsLeagues, sportsOn } from './settings';
 
 const HOUR = 60 * 60 * 1000;
@@ -27,6 +27,9 @@ const LIST_BEHIND_MS = 6 * HOUR;
 const LIST_AHEAD_MS = 30 * HOUR;
 const MAX_LIST_SPAN_MS = 4 * 24 * HOUR;
 const LIST_KEEP_MS = 20 * 1000;
+// The games whose channels are kept: half a day back, two ahead.
+const INDEX_BEHIND_MS = 12 * HOUR;
+const INDEX_AHEAD_MS = 48 * HOUR;
 const ALL_CHANNELS = 100000;
 const LOGO_HOST = 'a.espncdn.com';
 const MAX_LOGO_BYTES = 2 * 1024 * 1024;
@@ -99,13 +102,24 @@ export async function gamesList(deps: LiveTvDeps, req: any, config: any, board: 
   const kept = lists.get(key);
   if (kept) return kept;
 
-  const [read, listed] = await Promise.all([
+  // Which channel shows which game is read in the background and kept (channels.ts); the games and
+  // their scores are read fresh.
+  const guideKey = [live.base, ...live.catalogs.map((c) => `${c.type}/${c.id}`)].join('|');
+  const [read, found] = await Promise.all([
     board.games(from, to, leagues),
-    listChannels(deps.addon, live.base, live.catalogs, { startIndex: 0, limit: ALL_CHANNELS }),
+    gameChannels(guideKey, {
+      channels: async () => (await listChannels(deps.addon, live.base, live.catalogs, { startIndex: 0, limit: ALL_CHANNELS })).channels,
+      programmes: (channels) => {
+        const at = deps.now();
+        return programmesFor(deps.addon, live.base, live.reach, channels.map((c) => c.meta), at - INDEX_BEHIND_MS - 2 * HOUR, at + INDEX_AHEAD_MS + 4 * HOUR);
+      },
+      games: async () => {
+        const at = deps.now();
+        return (await board.games(at - INDEX_BEHIND_MS, at + INDEX_AHEAD_MS, sportsLeagues())).games;
+      },
+    }),
   ]);
-  const channels = listed.channels;
-  const guide = await programmesInParts((metas) => programmesFor(deps.addon, live.base, live.reach, metas, from - 2 * HOUR, to + 4 * HOUR), channels);
-  const byGame = channelsByGame(new GameFinder(read.games, now), channels, guide);
+  const byGame = found.byGame;
   const answer = {
     games: read.games.map((game) => ({
       ...gameInfo(game),
@@ -126,8 +140,11 @@ export async function gamesList(deps: LiveTvDeps, req: any, config: any, board: 
     })),
     leagues: leagues.map((league) => ({ key: league.key, name: league.name })),
     failed: read.failed,
+    // False while the guide is first read for channels: the games are there, their channels to come.
+    complete: found.complete,
   };
-  lists.set(key, answer);
+  // Kept only once complete, so an app asking again soon gets the channels as they're found.
+  if (found.complete) lists.set(key, answer);
   return answer;
 }
 

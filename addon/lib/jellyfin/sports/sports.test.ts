@@ -16,6 +16,7 @@ import { channelsByGame, GameFinder, gameInfo, ranked } from './guide';
 import { forgetGames, gameTagger, teamLogo } from './serve';
 import { programmesInParts } from './live';
 import { BoxingSource, divisionName, surnameOf } from './boxing';
+import { forgetGameChannels, gameChannels } from './channels';
 import { sportsLeagues, sportsOn } from './settings';
 import { programItem } from '../livetv/items';
 import type { ListedChannel } from '../livetv/lineup';
@@ -283,7 +284,10 @@ test('the check matches games to channels, by a programme or by the channel, and
     ]],
     ['tv|college', [programme('College Football: Ohio St. at Michigan', now + 0.5 * HOUR, now + 4.5 * HOUR, { live: true })]],
     ['tv|other', [programme('Bruins at Rangers', now + HOUR, now + 3.5 * HOUR, { live: true, genres: ['Sports'] })]],
-    ['tv|preview', [programme('Spartans Preview', now + 0.5 * HOUR, now + HOUR)]],
+    ['tv|preview', [
+      programme('Spartans Preview', now + 0.5 * HOUR, now + HOUR, { genres: ['Sports'] }),
+      programme('Spartans of the Galaxy', now + 1.5 * HOUR, now + 2 * HOUR),
+    ]],
   ]);
   const board = new Scoreboard({ base, now: () => now });
   const check = await sportsCheck({ channels: async () => channels, programmes: async () => guide }, board, now);
@@ -294,7 +298,8 @@ test('the check matches games to channels, by a programme or by the channel, and
   assert.deepEqual(channelsOf('Penn State Nittany Lions at Michigan State Spartans'), []);
   assert.deepEqual(check.unmatchedProgrammes.map((p) => p.programme), ['Bruins at Rangers']);
   assert.deepEqual(check.unmatchedChannels.map((c) => c.channel), ['NHL | Bruins v Rangers']);
-  // Penn State at Michigan State is on no channel; a programme near it names one of its teams.
+  // Penn State at Michigan State is on no channel; a sports programme near it names one of its teams
+  // (a cartoon sharing the word doesn't count).
   assert.deepEqual(check.nearMisses.map((m) => [m.game, m.programmes.map((p) => p.programme)]), [
     ['Penn State Nittany Lions at Michigan State Spartans', ['Spartans Preview']],
   ]);
@@ -638,4 +643,38 @@ test("a soccer game is found by its league where a guide names one side a way th
   assert.deepEqual(on('Premier League : Zulte Towners vs. York City', now - 5 * MINUTE), [], 'not marked live: a replay or a preview');
   assert.deepEqual(on('Premier League : Zulte Towners vs. York City ᴸᶦᵛᵉ', now + HOUR), [], 'an hour off its time');
   assert.deepEqual(on('Highlights : York City ᴸᶦᵛᵉ', now - 5 * MINUTE), [], 'no league named');
+});
+
+test('which channel shows which game is read once whole, then only the sports channels every few minutes', async () => {
+  forgetGameChannels();
+  const lineup: ListedChannel[] = [
+    { meta: { type: 'tv', id: 'films', name: 'Films' } },
+    { meta: { type: 'tv', id: 'philly', name: 'Philly Local' } },
+    { meta: { type: 'tv', id: 'espn', name: 'ESPN' } },
+  ];
+  const start = now + 3.5 * HOUR;
+  const guide = new Map<string, Programme[]>([['tv|philly', [shown('76ers at Pacers', start, start + 3 * HOUR, { live: true })]]]);
+  const asked: string[][] = [];
+  let clock = now;
+  const source = {
+    channels: async () => lineup,
+    programmes: async (part: ListedChannel[]) => {
+      asked.push(part.map((c) => c.meta.id));
+      return guide;
+    },
+    games: async () => allGames(),
+  };
+  const first = await gameChannels('guide-a', source, () => clock);
+  assert.equal(first.complete, true);
+  assert.deepEqual(first.byGame.get('nba:2')?.map((c) => c.channel.meta.id), ['philly']);
+  assert.deepEqual(asked, [['espn', 'films', 'philly']], 'the whole guide, sports channels first');
+  asked.length = 0;
+  clock += 60 * 1000;
+  await gameChannels('guide-a', source, () => clock);
+  assert.deepEqual(asked, [], 'read again within minutes');
+  clock += 6 * MINUTE;
+  await gameChannels('guide-a', source, () => clock);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(asked, [['philly', 'espn']], 'not only the channels found showing sport, and the sports channels');
+  forgetGameChannels();
 });

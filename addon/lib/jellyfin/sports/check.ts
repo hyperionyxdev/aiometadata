@@ -14,7 +14,7 @@ const MAX_LISTED = 300;
 // Around a game not found: programmes this near its start that name one of its teams.
 const NEAR_MS = 3 * HOUR;
 const NEAR_PER_GAME = 5;
-const MAX_NEAR_GAMES = 150;
+const MAX_NEAR_GAMES = 60;
 
 /**
  * How well a configuration's guide is matched to the day's games: each game with the channels found
@@ -82,10 +82,15 @@ const sporty = (programme: Programme): boolean =>
 /** Channels likely to show sport, by their name or group, read first when time is short. */
 const SPORTY_CHANNEL = /sport|espn|fox ?sports|tudn|dazn|bein|tsn|sky ?sports|tnt ?sports|nba|nfl|mlb|nhl|mls|ufc|ppv|event|deporte|futbol|fútbol|liga|premier|football|soccer|golf|tennis|racing|fight|boxing|box(eo)?\b|match|game|acc ?network|sec ?network|big ?ten|pac-?12|peacock|paramount|prime|flo/i;
 
+/** A channel likely to show sport, by its name or group; not one showing a single show all day ("24/7 …"). */
+export function sportyChannel(channel: ListedChannel): boolean {
+  if (/^\s*24\s*\/\s*7\b/.test(channel.meta.name)) return false;
+  return SPORTY_CHANNEL.test(channel.meta.name) || (channel.meta.groups ?? []).some((group) => SPORTY_CHANNEL.test(group));
+}
+
 /** Sports channels first, then the rest, each in the lineup's order. */
 export function sportsFirst(channels: ListedChannel[]): ListedChannel[] {
-  const sporty = (c: ListedChannel) => SPORTY_CHANNEL.test(c.meta.name) || (c.meta.groups ?? []).some((group) => SPORTY_CHANNEL.test(group));
-  return [...channels.filter(sporty), ...channels.filter((c) => !sporty(c))];
+  return [...channels.filter(sportyChannel), ...channels.filter((c) => !sportyChannel(c))];
 }
 
 export interface CheckOptions {
@@ -142,9 +147,11 @@ export async function sportsCheck(source: CheckSource, board: Scoreboard, now: n
       if (!named && looksLikeGame(channel.meta.name) && unmatchedChannels.length < MAX_LISTED) {
         unmatchedChannels.push({ channel: channel.meta.name, ...(number ? { number } : {}) });
       }
+      // Near misses only among what looks like sport: a cartoon or a film sharing a word with a team isn't one.
+      const nearHere = sportyChannel(channel);
       for (const programme of own) {
         const text = textOf(programme);
-        if (programme.start >= from - NEAR_MS && programme.start <= to + NEAR_MS) {
+        if ((nearHere || sporty(programme)) && programme.start >= from - NEAR_MS && programme.start <= to + NEAR_MS) {
           for (const team of finder.teamsIn(text)) {
             if (!wanted.has(team)) continue;
             const list = byTeam.get(team) ?? [];

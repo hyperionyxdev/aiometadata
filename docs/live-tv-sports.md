@@ -98,6 +98,11 @@ and every team playing that day is known, so a name isn't taken for a team it's 
   channel made for the game (4K first), then a programme marked live, then the rest, in channel number
   order. Each channel has its `Id`, `Name`, `Number`, `ChannelPrimaryImageTag` and `by`, and, where the
   guide has the game on it, `ProgramId`, `StartDate`, `EndDate` and `IsLive`. Kept 20 seconds.
+  Which channel shows which game is read in the background and kept (`channels.ts`): the whole guide
+  once, sports channels first, then every five minutes only the channels found showing sport (and
+  those named like sports channels), and the whole guide again every six hours. The first ask waits
+  three seconds at most for the first reading; until it's done, `complete` is false and the games
+  come without their channels.
 - **Team logos**, `GET /AIOStreams/Sports/Logo/{league}/{team}` (the `logo` path): fetched by this
   server from ESPN's image host only, and kept a week, so the apps never ask ESPN.
 
@@ -126,7 +131,8 @@ the games from 12 hours ago to 30 hours ahead, and the guide over that time, and
   that matched no game: a league not read, or a team named in a way not yet known.
 - `unmatchedChannels`: channels named like a game that matched none.
 - `nearMisses`: games found on no channel, each with up to five programmes within three hours of
-  its start that name one of its teams: where a guide names a team in a way not yet known, or a game
+  its start that name one of its teams, among programmes that look like sport (marked live, with a
+  sports genre, or on a channel named like a sports channel, not a "24/7" one): where a guide names a team in a way not yet known, or a game
   is listed at a time too far from ESPN's.
 - `failed`: leagues whose scoreboard couldn't be read.
 
