@@ -12,6 +12,8 @@ There are two recorders. One is chosen for the whole server.
 ## Dispatcharr's DVR (`JELLYFIN_RECORDINGS=dispatcharr`)
 
 The default where Live TV comes from Dispatcharr (see [live-tv-dispatcharr.md](live-tv-dispatcharr.md)).
+With Dispatcharr turned off in the dashboard (Custom · Live TV from Dispatcharr), recording through it
+is off too, and its recordings show again once it's back on.
 Dispatcharr records, keeps and plays the recordings, and every call is the one its own web app
 makes, so a recording set here is the same as one set in Dispatcharr, and the other way round:
 

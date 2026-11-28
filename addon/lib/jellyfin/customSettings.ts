@@ -22,6 +22,16 @@ const SPORTS = 'Custom: Live TV Sports';
 
 export const CUSTOM_SETTINGS: SettingDefinition[] = [
   {
+    key: 'JELLYFIN_DISPATCHARR_ENABLED',
+    envVar: 'JELLYFIN_DISPATCHARR_ENABLED',
+    label: 'Custom · Live TV from Dispatcharr',
+    description:
+      "On: Live TV comes straight from Dispatcharr, set up below with a login in the environment. Off: from the stream addon's live catalogs (Live TV must be on there too), and recording through Dispatcharr's DVR is off; its recordings show again when this is back on. Channel ids differ between the two, so favourites and reminders follow the source they were set on.",
+    category: DISPATCHARR,
+    type: 'boolean',
+    default: true,
+  },
+  {
     key: 'JELLYFIN_DISPATCHARR_URL',
     envVar: 'JELLYFIN_DISPATCHARR_URL',
     label: 'Custom · Dispatcharr Address',

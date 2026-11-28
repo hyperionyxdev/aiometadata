@@ -56,6 +56,7 @@ keeps them. `JELLYFIN_DISPATCHARR_OUTPUT_FORMAT=default` is the same as leaving 
 
 | Variable | |
 | --- | --- |
+| `JELLYFIN_DISPATCHARR_ENABLED` | Optional, on unless set to `false`; also a switch in the dashboard (Custom · Live TV from Dispatcharr), which applies at once. Off, Live TV comes from the stream addon's live catalogs (with `JELLYFIN_LIVETV_ENABLED` on) as if Dispatcharr weren't set up, and recording through Dispatcharr's DVR is off (a local recorder chosen on purpose keeps recording); Dispatcharr's recordings show again when it's back on. Channel ids differ between the two sources, so favourites and reminders stay with the source they were set on. |
 | `JELLYFIN_DISPATCHARR_URL` | Required. Dispatcharr's address as this server reaches it, for example `http://dispatcharr:9191` on a shared Docker network. Reached directly, not through `HTTPS_PROXY`, and a private address needs no `OUTBOUND_ALLOWED_PRIVATE_HOSTS` entry. |
 | `JELLYFIN_DISPATCHARR_API_KEY` | A Dispatcharr API key, or instead: |
 | `JELLYFIN_DISPATCHARR_USERNAME`, `JELLYFIN_DISPATCHARR_PASSWORD` | A Dispatcharr login (a token is asked for, refreshed and asked for again as needed). The user must be Standard or Admin; an Admin also lets Auto name the stream a running channel is on, and lets switching work. |

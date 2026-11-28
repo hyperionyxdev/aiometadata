@@ -71,8 +71,26 @@ function warnOnce(message: string): void {
   logger.warn(message);
 }
 
-/** The settings from the environment, or null when Dispatcharr Live TV is not set up (or set up wrongly). */
+let turnedOff: boolean | undefined;
+
+/** The dashboard's switch: on unless turned off. Said in the log as it changes. */
+function switchedOn(): boolean {
+  const on = readFlag('JELLYFIN_DISPATCHARR_ENABLED', true);
+  if (turnedOff !== undefined && turnedOff === on) {
+    logger.info(on ? 'Dispatcharr Live TV turned back on' : "Dispatcharr Live TV turned off: Live TV comes from the stream addon, and recording through Dispatcharr's DVR is off");
+  }
+  turnedOff = !on;
+  return on;
+}
+
+/**
+ * The settings from the environment, or null when Dispatcharr Live TV is not set up (or set up
+ * wrongly), or turned off in the dashboard (`JELLYFIN_DISPATCHARR_ENABLED`). Off, everything that
+ * asks here (the lineup, the guide, playback, Dispatcharr's DVR) finds it not set up: Live TV comes
+ * from the stream addon, and the logins stay in the environment for when it's back on.
+ */
 export function dispatcharrSettings(): DispatcharrSettings | null {
+  if (!switchedOn()) return null;
   const rawUrl = readEnv('JELLYFIN_DISPATCHARR_URL');
   if (!rawUrl) return null;
   let url: string;

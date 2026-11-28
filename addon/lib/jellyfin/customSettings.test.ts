@@ -114,6 +114,21 @@ test('auto records with Dispatcharr where Live TV comes from it, and is off othe
   assert.equal(recordingSettings(true).mode, 'local');
 });
 
+test("Dispatcharr turned off in the dashboard turns its recording off, and leaves a local recorder be", () => {
+  clearCustom();
+  setEnv('JELLYFIN_DISPATCHARR_URL', 'http://dispatcharr.invalid:9191');
+  setEnv('JELLYFIN_DISPATCHARR_API_KEY', 'k');
+  setEnv('JELLYFIN_DISPATCHARR_ENABLED', 'false');
+  const on = dispatcharrSettings() !== null;
+  assert.equal(on, false);
+  for (const asked of ['auto', 'dispatcharr', 'off']) {
+    setEnv('JELLYFIN_RECORDINGS', asked);
+    assert.equal(recordingSettings(on).mode, 'off', asked);
+  }
+  setEnv('JELLYFIN_RECORDINGS', 'local');
+  assert.equal(recordingSettings(on).mode, 'local');
+});
+
 test('a value saved in the dashboard is read straight away', () => {
   clearCustom();
   // The dashboard puts a saved value into the environment, which the readers look at on each use.

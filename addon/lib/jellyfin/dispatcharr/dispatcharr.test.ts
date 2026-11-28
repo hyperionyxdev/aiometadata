@@ -118,7 +118,7 @@ const live = (overrides: Partial<DispatcharrSettings> = {}) => new DispatcharrLi
 
 // ---------- Settings ----------
 
-const ENV_NAMES = ['URL', 'STREAM_URL', 'API_KEY', 'USERNAME', 'PASSWORD', 'XC_USERNAME', 'XC_PASSWORD', 'OUTPUT_FORMAT', 'USERS'].map((n) => `JELLYFIN_DISPATCHARR_${n}`);
+const ENV_NAMES = ['ENABLED', 'URL', 'STREAM_URL', 'API_KEY', 'USERNAME', 'PASSWORD', 'XC_USERNAME', 'XC_PASSWORD', 'OUTPUT_FORMAT', 'USERS'].map((n) => `JELLYFIN_DISPATCHARR_${n}`);
 function withEnv(values: Record<string, string>, run: () => void): void {
   const saved = Object.fromEntries(ENV_NAMES.map((name) => [name, process.env[name]]));
   for (const name of ENV_NAMES) delete process.env[name];
@@ -140,6 +140,13 @@ test('without its address, or without a login, Dispatcharr Live TV is off', () =
   });
   withEnv({ JELLYFIN_DISPATCHARR_URL: 'http://dispatcharr.invalid:9191' }, () => assert.equal(dispatcharrSettings(), null));
   withEnv({ JELLYFIN_DISPATCHARR_URL: 'not an address', JELLYFIN_DISPATCHARR_API_KEY: 'k' }, () => assert.equal(dispatcharrSettings(), null));
+});
+
+test("the dashboard's switch turns it off with everything set up, and on again", () => {
+  const setUp = { JELLYFIN_DISPATCHARR_URL: 'http://dispatcharr.invalid:9191', JELLYFIN_DISPATCHARR_API_KEY: 'k' };
+  withEnv(setUp, () => assert.notEqual(dispatcharrSettings(), null));
+  withEnv({ ...setUp, JELLYFIN_DISPATCHARR_ENABLED: 'false' }, () => assert.equal(dispatcharrSettings(), null));
+  withEnv({ ...setUp, JELLYFIN_DISPATCHARR_ENABLED: 'true' }, () => assert.notEqual(dispatcharrSettings(), null));
 });
 
 test('settings come from the environment', () => {
