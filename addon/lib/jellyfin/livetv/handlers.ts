@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (C) 2026 cedya77 and AIOMetadata contributors, see NOTICE
+import { createHash } from 'crypto';
 import { narrowedTo } from './catalogs';
 import { liveTvFor, liveTvReady, type LiveTv } from './gate';
 import { filterProgrammes, programmeTarget, searchChannels, type GuideItem } from './guide';
@@ -36,7 +37,11 @@ export interface HandlerDeps extends LiveTvDeps {
 
 const LIVE_KINDS = new Set(['livetv', 'channel', 'program']);
 const isLive = (descriptor: any): boolean => LIVE_KINDS.has(descriptor?.k);
-const viewMarks = (live: LiveTv) => ({ guide: live.catalogs.some((c) => c.guide), groups: live.reach.some((c) => c.groups.length > 0) });
+/** Which live source the channels come from, as a short fingerprint: never the addon's address itself, which can carry a login. */
+export const sourceMark = (live: Pick<LiveTv, 'base' | 'catalogs'>): string =>
+  createHash('sha256').update(JSON.stringify([live.base, live.catalogs.map((c) => `${c.type}/${c.id}`).sort()])).digest('hex').slice(0, 12);
+
+const viewMarks = (live: LiveTv) => ({ guide: live.catalogs.some((c) => c.guide), groups: live.reach.some((c) => c.groups.length > 0), source: sourceMark(live) });
 
 export async function liveAllowed(req: any, deps: LiveTvDeps): Promise<LiveTv | null> {
   return liveTvReady(deps, await deps.loadConfig(req));

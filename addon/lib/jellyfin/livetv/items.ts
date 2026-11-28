@@ -25,11 +25,13 @@ export function liveTvViewId(deps: Pick<ItemDeps, 'encodeId'>): string {
   return viewId;
 }
 
-export function liveTvView(deps: ItemDeps, serverId: string, { guide = false, groups = false }: { guide?: boolean; groups?: boolean } = {}): any {
+export function liveTvView(deps: ItemDeps, serverId: string, { guide = false, groups = false, source }: { guide?: boolean; groups?: boolean; source?: string } = {}): any {
   const view = { ...deps.collectionFolder(liveTvViewId(deps), serverId, 'Live TV', 'livetv', null), Type: 'UserView' };
   // Both said, true or false: a client offers its own groups (sports, news, ...) only where the
-  // view says it has none of its own.
-  return { ...view, aiostreams: { guide, groups } };
+  // view says it has none of its own. `source` changes when the channels come from elsewhere
+  // (Dispatcharr turned on or off, the addon's live sources changed), so a client keeping a copy of
+  // the guide knows its channels are another source's.
+  return { ...view, aiostreams: { guide, groups, ...(source ? { source } : {}) } };
 }
 
 export function groupItem(deps: ItemDeps, serverId: string, catalog: Pick<LiveCatalog, 'type' | 'id'>, name: string): any {

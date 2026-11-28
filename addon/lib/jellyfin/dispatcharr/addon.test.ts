@@ -174,3 +174,15 @@ test('a configuration on a stream addon still reads the stream addon', async () 
   await liveTvReady(gate, { jellyfinStreamUrl: 'https://addon.example/abc' });
   assert.deepEqual(realAsked, ['manifest https://addon.example/abc']);
 });
+
+test("the Live TV view's source mark tells Dispatcharr from the stream addon, without the addon's address", async () => {
+  const { sourceMark } = await import('../livetv/handlers');
+  const catalog = (id: string) => ({ type: 'tv', id, name: id, guide: true, skip: true, search: true, ids: true, groups: [] });
+  const direct = sourceMark({ base: DIRECT_BASE, catalogs: [catalog('dispatcharr')] });
+  const addonBase = 'https://addon.example/secret-config/manifest.json';
+  const viaAddon = sourceMark({ base: addonBase, catalogs: [catalog('abc.xtream')] });
+  assert.match(direct, /^[0-9a-f]{12}$/);
+  assert.notEqual(direct, viaAddon);
+  assert.equal(viaAddon, sourceMark({ base: addonBase, catalogs: [catalog('abc.xtream')] }));
+  assert.ok(!viaAddon.includes('secret'));
+});
