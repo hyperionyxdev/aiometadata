@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (C) 2026 cedya77 and AIOMetadata contributors, see NOTICE
+import consola from 'consola';
 import { LRUCache } from 'lru-cache';
 import { inTime } from '../addonReader';
 import { liveTvReady } from '../livetv/gate';
@@ -15,6 +16,7 @@ import { leagueByKey } from './leagues';
 import { gameChannels } from './channels';
 import { sportsLeagues, sportsOn } from './settings';
 
+const logger = consola.withTag('JellyfinSports');
 const HOUR = 60 * 60 * 1000;
 // The games a guide's programmes are found among: a day back, two ahead.
 const FINDER_BEHIND_MS = 24 * HOUR;
@@ -159,6 +161,17 @@ export interface LogoAnswer {
   bytes: Buffer;
 }
 
+const logoWarned = new Map<string, number>();
+/** Why a logo didn't come, in the log at most once a minute for each reason. */
+function logoFailed(why: string): null {
+  const now = Date.now();
+  if ((logoWarned.get(why) ?? 0) + 60 * 1000 < now) {
+    logoWarned.set(why, now);
+    logger.warn(`A team logo couldn't be sent: ${why}`);
+  }
+  return null;
+}
+
 /** A team's logo, fetched by this server from ESPN's image host only and kept, so apps never ask ESPN. */
 export async function teamLogo(league: string, team: string, board: Scoreboard = sharedBoard, fetcher: typeof fetch = fetch): Promise<LogoAnswer | null> {
   if (!sportsOn()) return null;
@@ -170,27 +183,28 @@ export async function teamLogo(league: string, team: string, board: Scoreboard =
     await board.games(now - FINDER_BEHIND_MS, now + FINDER_AHEAD_MS, [known]);
     url = board.logoOf(league, team);
   }
-  if (!url) return null;
+  if (!url) return logoFailed(`no logo known for ${league}/${team} (its games not read)`);
   let parsed: URL;
   try {
     parsed = new URL(url);
   } catch {
-    return null;
+    return logoFailed('its address could not be read');
   }
-  if (parsed.protocol !== 'https:' || parsed.hostname !== LOGO_HOST) return null;
+  if (parsed.protocol !== 'https:' || parsed.hostname !== LOGO_HOST) return logoFailed(`its address is on another host (${parsed.hostname})`);
   const kept = logos.get(url);
   if (kept) return kept;
   try {
     const response = await fetcher(url, { headers: { 'user-agent': 'AIOMetadata' }, signal: AbortSignal.timeout(LOGO_TIMEOUT_MS) });
     const type = response.headers.get('content-type') ?? '';
-    if (!response.ok || !/^image\//i.test(type)) return null;
+    if (!response.ok) return logoFailed(`ESPN's image host answered HTTP ${response.status}`);
+    if (!/^image\//i.test(type)) return logoFailed(`ESPN's image host sent ${type || 'no type'}, not a picture`);
     const bytes = Buffer.from(await response.arrayBuffer());
-    if (!bytes.length || bytes.length > MAX_LOGO_BYTES) return null;
+    if (!bytes.length || bytes.length > MAX_LOGO_BYTES) return logoFailed(`it was ${bytes.length} bytes`);
     const logo = { type, bytes };
     logos.set(url, logo);
     return logo;
-  } catch {
-    return null;
+  } catch (error: any) {
+    return logoFailed(error?.name === 'TimeoutError' ? "ESPN's image host didn't answer in time" : `ESPN's image host couldn't be reached (${error?.cause?.code ?? error?.name ?? 'error'})`);
   }
 }
 
