@@ -17,14 +17,14 @@ const logger = consola.withTag('JellyfinPlaystate');
 
 const TICKS_PER_MS = 10000;
 
-const playedThresholds = new LRUCache<string, { percent: number | null }>({
+const userSettings = new LRUCache<string, { percent: number | null; subtitleLanguages: string[] }>({
   max: 5000,
   ttl: envInt('JELLYFIN_USER_SETTINGS_CACHE_MS', 60000, 0) || 1,
 });
 
 /** A profile's settings were saved, so they are read again. */
 export function forgetUserSettings(userUUID: string): void {
-  for (const key of playedThresholds.keys()) if (key.startsWith(`${userUUID}:`)) playedThresholds.delete(key);
+  for (const key of userSettings.keys()) if (key.startsWith(`${userUUID}:`)) userSettings.delete(key);
 }
 
 const USER_CONFIGURATION_ID = 'user-configuration';
@@ -38,9 +38,18 @@ export function validPlayedThreshold(value: unknown): number | null {
   return Number.isFinite(percent) && percent >= 50 && percent <= 100 ? percent : null;
 }
 
-export async function storedPlayedThreshold(userUUID: string, profileId: string | null, known?: any): Promise<number | null> {
+/** The ordered subtitle languages where the client keeps a list, else its single preferred one. */
+function subtitleLanguagesOf(stored: any): string[] {
+  const list = Array.isArray(stored?.SubtitleLanguages) ? stored.SubtitleLanguages : [];
+  const named = list.filter((code: unknown): code is string => typeof code === 'string' && !!code.trim());
+  if (named.length) return named;
+  const one = stored?.SubtitleLanguagePreference;
+  return typeof one === 'string' && one.trim() ? [one] : [];
+}
+
+async function storedUserSettings(userUUID: string, profileId: string | null, known?: any): Promise<{ percent: number | null; subtitleLanguages: string[] }> {
   const key = `${userUUID}:${profileId ?? ''}`;
-  let held = playedThresholds.get(key);
+  let held = userSettings.get(key);
   if (!held) {
     try {
       const database = require('../database');
@@ -48,13 +57,22 @@ export async function storedPlayedThreshold(userUUID: string, profileId: string 
       const config = known ?? (await require('../configApi').loadSharedConfig(userUUID).catch(() => null));
       const profile = profileById(config, userUUID, profileId);
       const stored = await database.getPreferences(userUUID, profile?.id ?? '', USER_CONFIGURATION_ID, '');
-      held = { percent: validPlayedThreshold(stored?.PlayedThresholdPercent) };
+      held = { percent: validPlayedThreshold(stored?.PlayedThresholdPercent), subtitleLanguages: subtitleLanguagesOf(stored) };
     } catch {
-      held = { percent: null };
+      held = { percent: null, subtitleLanguages: [] };
     }
-    playedThresholds.set(key, held);
+    userSettings.set(key, held);
   }
-  return held.percent;
+  return held;
+}
+
+export async function storedPlayedThreshold(userUUID: string, profileId: string | null, known?: any): Promise<number | null> {
+  return (await storedUserSettings(userUUID, profileId, known)).percent;
+}
+
+/** The subtitle languages a profile set in its client, most wanted first. */
+export async function subtitleLanguagesFor(userUUID: string, profileId: string | null, known?: any): Promise<string[]> {
+  return (await storedUserSettings(userUUID, profileId, known)).subtitleLanguages;
 }
 
 export async function playedThresholdFor(userUUID: string, profileId: string | null, known?: any): Promise<number> {
@@ -914,14 +932,26 @@ export async function recordWatchDate(req: any, itemId: string, from: number | n
     logger.debug(`User data push failed for ${session.videoId}: ${error?.message || error}`)
   );
   if (from === null || !tellsTrackers(config, 'dashboard')) return true;
-  const { enqueueTrackerWrites, hasCredential } = require('../trackerOutbox');
-  const latest = session.descriptor.k === 'episode' && latestAfter !== latestBefore ? latestAfter : null;
-  const services = ['mdblist', 'publicmetadb', ...(latest ? ['simkl'] : [])].filter((service) => hasCredential(config, service));
+  const { enqueueTrackerWrites } = require('../trackerOutbox');
+  const latest = latestAfter !== latestBefore ? latestAfter : null;
+  const services = await redateServices(config, session.descriptor.k === 'episode', latest !== null);
   await enqueueTrackerWrites(userUUID, config, services.map((service) => ({
     service, op: 'redate', item: session.descriptor.i,
     payload: { type: session.stremioType, id: session.videoId, from, to, latest, ...(apart ? { apart: true } : {}) },
   }))).catch((error: any) => logger.debug(`Moving the watch date on trackers failed for ${session.videoId}: ${error?.message || error}`));
   return true;
+}
+
+/** The trackers a date change reaches: those that keep each viewing, and those that keep one date once that date moved. */
+async function redateServices(config: any, episode: boolean, latestMoved: boolean): Promise<string[]> {
+  const { hasCredential } = require('../trackerOutbox');
+  const { redateScope } = require('../trackers');
+  const picked = await Promise.all(['mdblist', 'publicmetadb', 'simkl'].map(async (service) => {
+    if (!hasCredential(config, service)) return null;
+    const scope = await redateScope(service, config);
+    return scope === 'all' || (latestMoved && (scope === 'titles' || (scope === 'episodes' && episode))) ? service : null;
+  }));
+  return picked.filter((service): service is string => service !== null);
 }
 
 /** Deletes one viewing of a title watched more than once, here and on the trackers that keep plays. */
@@ -950,10 +980,10 @@ export async function recordWatchRemoval(req: any, itemId: string, at: number): 
     logger.debug(`User data push failed for ${session.videoId}: ${error?.message || error}`)
   );
   if (!tellsTrackers(config, 'dashboard')) return true;
-  const { enqueueTrackerWrites, hasCredential } = require('../trackerOutbox');
-  // A tracker that keeps one date per episode only moves when the latest viewing went.
-  const latest = session.descriptor.k === 'episode' && latestAfter !== null && latestAfter !== latestBefore ? latestAfter : null;
-  const services = ['mdblist', 'publicmetadb', ...(latest ? ['simkl'] : [])].filter((service) => hasCredential(config, service));
+  const { enqueueTrackerWrites } = require('../trackerOutbox');
+  // A tracker that keeps one date per title or episode only moves when the latest viewing went.
+  const latest = latestAfter !== null && latestAfter !== latestBefore ? latestAfter : null;
+  const services = await redateServices(config, session.descriptor.k === 'episode', latest !== null);
   await enqueueTrackerWrites(userUUID, config, services.map((service) => ({
     service, op: 'redate', item: session.descriptor.i,
     payload: { type: session.stremioType, id: session.videoId, from: at, to: at, latest, remove: true },

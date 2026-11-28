@@ -100,7 +100,7 @@ External subtitles come from two places, both offered as subtitle streams on eac
 - the subtitle links a stream itself carries;
 - every addon in the configuration that declares a subtitle resource, asked with the file's hash, size and name so it can match the release.
 
-Anime titles known under a Kitsu or MyAnimeList id are also asked under their IMDb id, since most subtitle addons only know that one. Results are spread across languages round-robin so one language with dozens of files does not crowd out the rest: `JELLYFIN_SUBTITLES_PER_LANGUAGE` per language, `JELLYFIN_SUBTITLES_MAX` in total. SRT, WebVTT, ASS and JSON are converted to whatever the client asks for. Converted text is kept in memory (`JELLYFIN_SUBTITLE_BODY_CACHE_MB`) so a seek or a second device does not fetch the file again.
+Anime titles known under a Kitsu or MyAnimeList id are also asked under their IMDb id, since most subtitle addons only know that one. The subtitle languages a profile chose in its client (its ordered `SubtitleLanguages` list, else `SubtitleLanguagePreference`) come first, up to `JELLYFIN_SUBTITLES_PER_PREFERRED_LANGUAGE` files each. The other languages are spread round-robin so one language with dozens of files does not crowd out the rest: `JELLYFIN_SUBTITLES_PER_LANGUAGE` per language, `JELLYFIN_SUBTITLES_MAX` in total. A stream's own subtitles stay ahead of the addons', picked as they would be without them. A `PlaybackInfo` body with `SkipSubtitles: true` is answered without asking the subtitle addons; asking again for the same version without it adds theirs after the tracks already sent, at the same indexes. SRT, WebVTT, ASS and JSON are converted to whatever the client asks for. Converted text is kept in memory (`JELLYFIN_SUBTITLE_BODY_CACHE_MB`) so a seek or a second device does not fetch the file again.
 
 ### Trailers
 
@@ -256,7 +256,7 @@ Live TV shows the channels of the configuration's playback addon, the one under 
 AIOStreams has a Jellyfin server of its own. In that setup the client signs in to AIOStreams, not to this addon, and AIOMetadata is one of the addons installed in it, supplying the catalogs and title pages. Nothing in this guide's sign-in, users or shelves sections applies then; AIOStreams builds those. What AIOMetadata still does is the tracking, through two resources it declares in its manifest once **It counts as watched** in the **Watch Tracking** tab is set to **When it's finished**, with **Jellyfin apps** on:
 
 - **playback.** AIOStreams sends the plays its clients report as start, stop, mark-played and mark-unplayed events, with the title known under every id it holds, so a show keyed on MyAnimeList with episodes keyed on Kitsu is still recorded once. A stop past the trackers' 80 percent counts as a watch; an earlier one is a resume point. Each event is reported to every tracker with watch tracking on, the same way a play through this addon's own server is. A repeated event within `PLAYBACK_MARK_REPEAT_WINDOW` is an echo and dropped.
-- **watch_state.** AIOStreams reads back what the trackers and this addon hold, so its Continue Watching reflects other devices. The answer is the same merged view this addon's own resume shelf uses, following the **Trackers** pick, newest first, `WATCH_STATE_PULL_ITEMS` titles at a time, and may be reused for `WATCH_STATE_PULL_TTL` seconds before AIOStreams asks again.
+- **watch_state.** AIOStreams reads back what the trackers and this addon hold, so its Continue Watching reflects other devices. The answer is the same merged view this addon's own resume shelf uses, following the **Trackers** pick, newest first, `WATCH_STATE_PULL_ITEMS` titles at a time, and may be reused for `WATCH_STATE_PULL_TTL` seconds before AIOStreams asks again. The watched films and episodes, Next Up and drops come from the tracker the shelves read, or from this server's own records under **This server only** or with no tracker connected. Every id a title is known by is listed, so AIOStreams matches whichever its titles carry. A list past `WATCH_STATE_PULL_MAX_WATCHED` ids is left out, so AIOStreams keeps what it already has instead of refusing the whole answer.
 
 **Several people on AIOStreams' server.** Once the configuration has a user card, or a name under **Also known as (AIOStreams and other apps)** on your own card, the manifest tells AIOStreams it may name the viewer (`watchState.viewers`). An event carrying a `viewer`, or a read asking `?viewer=`, is matched to a user here by name, case aside: your own user's name, a user card's name, or one of the names listed under **Also known as (AIOStreams and other apps)** on a card. A matched user's plays, marks, drops and hearts go to their own accounts, and the read answers from their accounts and picks, as on this addon's own server. The handoff keeps no positions of its own, so the plays of a user without accounts are accepted and recorded nowhere; AIOStreams keeps their Continue Watching. An event without a viewer is yours, as before, and so is every event while the configuration has no user cards or AIOStreams names. Otherwise an event naming nobody here is refused and recorded nowhere, so a family member without a card never lands on your trackers; the log shows the name. Anyone holding the install URL can act as any user through these two resources, the same trust the URL already carried for yours.
 
@@ -339,6 +339,7 @@ All of these are in the dashboard under **Server**, or as environment variables,
 | Setting | Default | What it does |
 |---|---|---|
 | `JELLYFIN_SUBTITLES_PER_LANGUAGE` | `3` | Subtitle files offered per language. |
+| `JELLYFIN_SUBTITLES_PER_PREFERRED_LANGUAGE` | `10` | Subtitle files offered for each subtitle language the profile chose in its client. |
 | `JELLYFIN_SUBTITLES_MAX` | `40` | Subtitle files offered across all languages. |
 | `JELLYFIN_SUBTITLE_TTL` | `3600` | How long the subtitles found for a file, and their converted text, are kept. |
 | `JELLYFIN_SUBTITLE_FETCH_TIMEOUT_MS` | `15000` | How long a subtitle file, or an addon's search, may take. |
@@ -377,6 +378,7 @@ All of these are in the dashboard under **Server**, or as environment variables,
 | `JELLYFIN_PLAYLIST_COVER_TTL` | `21600` | How long a playlist's picture is held before it is read again; a new first title is read at once. |
 | `WATCH_STATE_PULL_TTL` | `300` | How long a front end reading watch state from the addon may reuse an answer. |
 | `WATCH_STATE_PULL_ITEMS` | `100` | In-progress titles a watch state read returns. |
+| `WATCH_STATE_PULL_MAX_WATCHED` | `50000` | The most ids a watch state read lists for watched films, episodes, drops or the watchlist; a longer list is left out. Keep it at or under the reader's own limit. |
 
 ## Client notes
 
