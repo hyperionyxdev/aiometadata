@@ -14,6 +14,8 @@ export interface League {
   source?: 'boxerbook';
   /** More of the scoreboard's query: college basketball lists a few featured games unless asked for all of Division I. */
   query?: string;
+  /** How a guide names a soccer league ("Fútbol Ligue 1 : …"): with one team named, live and on time, a game of it. */
+  words?: string[];
 }
 
 export const LEAGUES: League[] = [
@@ -26,25 +28,25 @@ export const LEAGUES: League[] = [
   { key: 'ncaaf', path: 'football/college-football', name: 'College Football', sport: 'football' },
   { key: 'nhl', path: 'hockey/nhl', name: 'NHL', sport: 'hockey' },
   { key: 'mlb', path: 'baseball/mlb', name: 'MLB', sport: 'baseball' },
-  { key: 'mls', path: 'soccer/usa.1', name: 'MLS', sport: 'soccer' },
+  { key: 'mls', path: 'soccer/usa.1', name: 'MLS', sport: 'soccer', words: ['mls', 'major league soccer'] },
   { key: 'nwsl', path: 'soccer/usa.nwsl', name: 'NWSL', sport: 'soccer' },
-  { key: 'epl', path: 'soccer/eng.1', name: 'Premier League', sport: 'soccer' },
-  { key: 'efl', path: 'soccer/eng.2', name: 'EFL Championship', sport: 'soccer' },
-  { key: 'facup', path: 'soccer/eng.fa', name: 'FA Cup', sport: 'soccer' },
-  { key: 'laliga', path: 'soccer/esp.1', name: 'LaLiga', sport: 'soccer' },
-  { key: 'bundesliga', path: 'soccer/ger.1', name: 'Bundesliga', sport: 'soccer' },
-  { key: 'seriea', path: 'soccer/ita.1', name: 'Serie A', sport: 'soccer' },
-  { key: 'ligue1', path: 'soccer/fra.1', name: 'Ligue 1', sport: 'soccer' },
-  { key: 'ligamx', path: 'soccer/mex.1', name: 'Liga MX', sport: 'soccer' },
-  { key: 'ligaexp', path: 'soccer/mex.2', name: 'Liga de Expansión MX', sport: 'soccer' },
+  { key: 'epl', path: 'soccer/eng.1', name: 'Premier League', sport: 'soccer', words: ['premier league', 'epl'] },
+  { key: 'efl', path: 'soccer/eng.2', name: 'EFL Championship', sport: 'soccer', words: ['championship', 'efl'] },
+  { key: 'facup', path: 'soccer/eng.fa', name: 'FA Cup', sport: 'soccer', words: ['fa cup', 'copa fa'] },
+  { key: 'laliga', path: 'soccer/esp.1', name: 'LaLiga', sport: 'soccer', words: ['laliga', 'la liga'] },
+  { key: 'bundesliga', path: 'soccer/ger.1', name: 'Bundesliga', sport: 'soccer', words: ['bundesliga'] },
+  { key: 'seriea', path: 'soccer/ita.1', name: 'Serie A', sport: 'soccer', words: ['serie a'] },
+  { key: 'ligue1', path: 'soccer/fra.1', name: 'Ligue 1', sport: 'soccer', words: ['ligue 1'] },
+  { key: 'ligamx', path: 'soccer/mex.1', name: 'Liga MX', sport: 'soccer', words: ['liga mx', 'liga bbva mx'] },
+  { key: 'ligaexp', path: 'soccer/mex.2', name: 'Liga de Expansión MX', sport: 'soccer', words: ['liga de expansion', 'expansion mx'] },
   { key: 'ligamxf', path: 'soccer/mex.w.1', name: 'Liga MX Femenil', sport: 'soccer' },
   { key: 'copamx', path: 'soccer/mex.copa_mx', name: 'Copa MX', sport: 'soccer' },
   { key: 'concacaf', path: 'soccer/concacaf.champions', name: 'Concacaf Champions Cup', sport: 'soccer' },
   { key: 'leaguescup', path: 'soccer/concacaf.leagues.cup', name: 'Leagues Cup', sport: 'soccer' },
   { key: 'concacafw', path: 'soccer/concacaf.womens.championship', name: 'Concacaf W Championship', sport: 'soccer' },
   { key: 'wgoldcup', path: 'soccer/concacaf.w.gold', name: 'Concacaf W Gold Cup', sport: 'soccer' },
-  { key: 'ucl', path: 'soccer/uefa.champions', name: 'Champions League', sport: 'soccer' },
-  { key: 'uel', path: 'soccer/uefa.europa', name: 'Europa League', sport: 'soccer' },
+  { key: 'ucl', path: 'soccer/uefa.champions', name: 'Champions League', sport: 'soccer', words: ['champions league', 'liga de campeones'] },
+  { key: 'uel', path: 'soccer/uefa.europa', name: 'Europa League', sport: 'soccer', words: ['europa league', 'liga europa'] },
   // Fight cards: the card is the game, its main event's fighters its two sides (espn.ts).
   { key: 'ufc', path: 'mma/ufc', name: 'UFC', sport: 'mma' },
   { key: 'pfl', path: 'mma/pfl', name: 'PFL', sport: 'mma' },

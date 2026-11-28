@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (C) 2026 cedya77 and AIOMetadata contributors, see NOTICE
+import { TEAM_ALIASES } from './aliases';
 import type { Game, Team } from './espn';
 
 const MINUTE = 60 * 1000;
@@ -109,6 +110,14 @@ export function wordsOf(text: string): string[] {
 export const teamKey = (game: Pick<Game, 'league'>, team: Pick<Team, 'id'>): string => `${game.league}:${team.id}`;
 
 /** Every name a team goes by, as words. */
+let aliases: Map<string, string[][]> | null = null;
+
+/** The other names guides give a team (aliases.ts), by any of its own names, written plainly. */
+function aliasesOf(name: string): string[][] {
+  aliases ??= new Map(Object.entries(TEAM_ALIASES).map(([key, list]) => [wordsOf(key).join(' '), list.map(wordsOf)]));
+  return aliases.get(name) ?? [];
+}
+
 export function namesOf(team: Team): string[][] {
   const names = new Map<string, string[]>();
   const add = (words: string[]) => {
@@ -122,6 +131,7 @@ export function namesOf(team: Team): string[][] {
     // "Arsenal FC", "FC Barcelona": also without the mark.
     if (words.length > 1 && CLUB_MARKS.has(words[words.length - 1])) add(words.slice(0, -1));
     if (words.length > 1 && CLUB_MARKS.has(words[0])) add(words.slice(1));
+    for (const other of aliasesOf(words.join(' '))) add(other);
   }
   return [...names.values()];
 }

@@ -3,7 +3,8 @@
 import type { ListedChannel } from '../livetv/lineup';
 import type { Programme } from '../livetv/programmes';
 import type { Game, Team } from './espn';
-import { gameOfChannel, gamesNamed, showsGame, TeamNames } from './match';
+import { LEAGUES } from './leagues';
+import { gameOfChannel, gamesNamed, showsGame, teamKey, TeamNames, wordsOf } from './match';
 
 const HOUR = 60 * 60 * 1000;
 // How far from its game a channel made for it still counts as carrying it: its build-up and wrap-up.
@@ -20,6 +21,11 @@ export interface Showing {
 }
 
 const keyOf = (channel: ListedChannel): string => `${channel.meta.type}|${channel.meta.id}`;
+
+let phrases: Array<{ key: string; phrase: string }> | null = null;
+/** How guides name the soccer leagues, written plainly, worked out once. */
+const leaguePhrases = () =>
+  (phrases ??= LEAGUES.flatMap((league) => (league.words ?? []).map((word) => ({ key: league.key, phrase: ` ${wordsOf(word).join(' ')} ` }))));
 const textOf = (programme: Programme): string => [programme.title, programme.episodeTitle].filter(Boolean).join(' · ');
 
 /**
@@ -32,6 +38,8 @@ export class GameFinder {
   private readonly byChannel = new Map<string, Game | null>();
   /** The games a programme's name names, by its name: a guide repeats the same names many times. */
   private readonly byText = new Map<string, Game[]>();
+  /** The soccer games a live programme's name could be by its league and one side, by its name. */
+  private readonly byLeague = new Map<string, Game[]>();
 
   constructor(readonly games: Game[], private readonly now: number) {
     this.names = new TeamNames(games);
@@ -62,7 +70,30 @@ export class GameFinder {
       if (this.byText.size >= 50000) this.byText.clear();
       this.byText.set(text, named);
     }
-    return named.length ? named.filter((game) => showsGame(programme, game)) : named;
+    if (named.length) return named.filter((game) => showsGame(programme, game));
+    return this.soccerByLeague(programme, text);
+  }
+
+  /**
+   * A soccer game a guide names one side of the way ESPN doesn't ("Fútbol Ligue 1 : Stade Brestois
+   * vs. Paris FC"): the other side named, the league named, marked live, starting within 20 minutes
+   * of the game and long enough to be it.
+   */
+  private soccerByLeague(programme: Programme, text: string): Game[] {
+    const live = programme.live === true || /ᴸᶦᵛᵉ|\blive\b|en vivo|en directo/i.test(text);
+    if (!live || programme.end - programme.start < 90 * 60 * 1000) return [];
+    let candidates = this.byLeague.get(text);
+    if (!candidates) {
+      const words = ` ${wordsOf(text).join(' ')} `;
+      const leagues = new Set(leaguePhrases().filter(({ phrase }) => words.includes(phrase)).map(({ key }) => key));
+      const teams = leagues.size ? this.names.teamsIn(text) : new Set<string>();
+      candidates = leagues.size
+        ? this.names.gamesFor(teams).filter((game) => leagues.has(game.league) && (teams.has(teamKey(game, game.home)) || teams.has(teamKey(game, game.away))))
+        : [];
+      if (this.byLeague.size >= 50000) this.byLeague.clear();
+      this.byLeague.set(text, candidates);
+    }
+    return candidates.filter((game) => Math.abs(programme.start - game.start) <= 20 * 60 * 1000);
   }
 
   /** What a programme shows of a game, if anything. */

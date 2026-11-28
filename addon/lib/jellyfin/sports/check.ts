@@ -8,7 +8,7 @@ import { channelsByGame, GameFinder } from './guide';
 import { looksLikeGame, teamKey } from './match';
 
 const HOUR = 60 * 60 * 1000;
-const BEHIND_MS = 6 * HOUR;
+const BEHIND_MS = 12 * HOUR;
 const AHEAD_MS = 30 * HOUR;
 const MAX_LISTED = 300;
 // Around a game not found: programmes this near its start that name one of its teams.

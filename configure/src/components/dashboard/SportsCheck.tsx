@@ -219,7 +219,7 @@ export function SportsCheck() {
       <div>
         <p className="text-sm font-medium">Check the guide against today's games</p>
         <p className="text-sm text-muted-foreground">
-          Reads the games from 6 hours ago to 30 hours ahead and the Live TV guide over that time, sports channels first, and
+          Reads the games from 12 hours ago to 30 hours ahead and the Live TV guide over that time, sports channels first, and
           shows which games were found on which channels. On a very large guide it reads for up to a minute and a half.
         </p>
       </div>

@@ -65,7 +65,9 @@ server sends; they don't name a source themselves.
 A team is known by every name ESPN gives it (full, short, nickname and place: "Philadelphia 76ers",
 "76ers", "Philadelphia"), compared without accents, full stops or apostrophes, with "St.",
 "Saint" and "State" written one way, and Spanish guides' names for countries read as ESPN's
-("Estados Unidos", "Inglaterra", "Corea del Sur"). A programme or a channel names a game when it names both of its
+("Estados Unidos", "Inglaterra", "Corea del Sur"). Teams also go by the other names guides give them
+(`aliases.ts`): a club's full or Spanish name ("Stade Brestois", "Hamburgo", "Inter de Milán", "Chivas")
+and a college's full name or letters ("Texas-San Antonio" for UTSA, "FIU"). A programme or a channel names a game when it names both of its
 teams. Where one name sits inside a longer one ("Michigan" in "Michigan State"), the longer one wins,
 and every team playing that day is known, so a name isn't taken for a team it's only part of.
 
@@ -73,6 +75,9 @@ and every team playing that day is known, so a name isn't taken for a team it's 
   the game or 90 after (joined late, or a guide an hour out, as some for Mexico's channels are),
   running at least half an hour into it. A preview that ends as the game
   starts, or a replay later on, isn't the game.
+- **By a league:** a soccer game a guide names one side of in a way not known ("Fútbol Ligue 1 :
+  Stade Brestois vs. Paris FC"), the other side named, the league named, marked live and starting
+  within 20 minutes of the game.
 - **By a channel:** a channel made for a game ("4K | NBA | 76ers v Pacers | 4:30 PM PST") names it in
   its own name. Where its name fits several games (a series), it's the one under way, else the next.
 
@@ -113,7 +118,7 @@ It checks every configuration with Live TV, once for each guide: `guides`, each 
 `configurations` that share it. One configuration alone, with its own page open with every profile:
 `/api/dashboard/jellyfin/<configuration UUID>/sports-check`, the UUID being the one in the server
 address the apps use (`/jellyfin/<UUID>`). It reads
-the games from 6 hours ago to 30 hours ahead, and the whole guide over that time, and answers with:
+the games from 12 hours ago to 30 hours ahead, and the guide over that time, and answers with:
 
 - `leagues`: per league, its games and how many were found on at least one channel.
 - `games`: each game with the channels found showing it, and whether by a programme or the channel.

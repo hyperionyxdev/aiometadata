@@ -606,3 +606,36 @@ test('the check reads sports channels first, a share at a time, and answers with
   assert.equal(check.channelsRead, 6);
   assert.equal(check.channels, 8);
 });
+
+test('the other names guides give teams: a club in full or in Spanish, a college by letters or in full', () => {
+  const soccer = (key: string, id: string, home: any, away: any, at = now) => gamesOf({ events: [event(id, at, 'pre', home, away)] }, leagueByKey(key)!);
+  const club = (id: string, name: string, short = name) => ({ id, location: name, name, abbreviation: id, displayName: name, shortDisplayName: short });
+  const games = [
+    ...soccer('ligue1', 'l1', club('B', 'Brest'), club('P', 'Paris FC')),
+    ...soccer('bundesliga', 'b1', club('H', 'Hamburg SV', 'Hamburg'), club('M', 'Bayern Munich', 'Bayern')),
+    ...soccer('seriea', 's1', club('I', 'Internazionale'), club('G', 'Genoa')),
+    ...gamesOf({ events: [event('c1', now, 'pre', team('U', 'UNLV', 'Rebels', 'UNLV'), team('R', 'UT Rio Grande Valley', 'Vaqueros', 'UTRGV'))] }, ncaaf),
+    ...gamesOf({ events: [event('c2', now, 'pre', team('O', 'Ole Miss', 'Rebels', 'MISS'), team('S', 'Mississippi State', 'Bulldogs', 'MSST', 'Mississippi St'))] }, ncaaf),
+  ];
+  const names = new TeamNames(games);
+  const named = (text: string) => gamesNamed(text, games, names).map((g) => g.id);
+  assert.deepEqual(named('French Ligue 1 Soccer : Stade Brestois vs. Paris FC'), ['ligue1:l1']);
+  assert.deepEqual(named('Fútbol Bundesliga : Hamburgo SV vs. Bayern Munich'), ['bundesliga:b1']);
+  assert.deepEqual(named('BL : Hamburger SV - FC Bayern München'), ['bundesliga:b1']);
+  assert.deepEqual(named('Fútbol Serie A : Inter de Milán vs. Genoa'), ['seriea:s1']);
+  assert.deepEqual(named('INTER - GENOA (Z)'), ['seriea:s1']);
+  assert.deepEqual(named('College Basketball : Texas-Rio Grande Valley at UNLV'), ['ncaaf:c1']);
+  assert.deepEqual(named('College Football : Mississippi State at Mississippi'), ['ncaaf:c2']);
+});
+
+test("a soccer game is found by its league where a guide names one side a way that isn't known", () => {
+  const club = (id: string, name: string) => ({ id, location: name, name, abbreviation: id, displayName: name, shortDisplayName: name });
+  const games = gamesOf({ events: [event('x1', now, 'pre', club('Z', 'Zulte Town'), club('Y', 'York City'))] }, leagueByKey('epl')!);
+  const finder = new GameFinder(games, now);
+  const on = (title: string, start: number, extra: Partial<Programme> = {}) => finder.programmeGames(shown(title, start, start + 2 * HOUR, extra)).map((g) => g.id);
+  assert.deepEqual(on('Premier League : Zulte Towners vs. York City ᴸᶦᵛᵉ', now - 5 * MINUTE), ['epl:x1']);
+  assert.deepEqual(on('Premier League : Zulte Towners vs. York City', now - 5 * MINUTE, { live: true }), ['epl:x1']);
+  assert.deepEqual(on('Premier League : Zulte Towners vs. York City', now - 5 * MINUTE), [], 'not marked live: a replay or a preview');
+  assert.deepEqual(on('Premier League : Zulte Towners vs. York City ᴸᶦᵛᵉ', now + HOUR), [], 'an hour off its time');
+  assert.deepEqual(on('Highlights : York City ᴸᶦᵛᵉ', now - 5 * MINUTE), [], 'no league named');
+});
